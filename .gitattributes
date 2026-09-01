@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.go text diff=golang
+*.md text diff=markdown
+*.yml text
+*.yaml text
+*.json text
+*.sum text
+*.sh text eol=lf
+*.ps1 text eol=lf
+
+*.gz binary
+*.zip binary
+*.exe binary

@@ -1,0 +1,23 @@
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+  categories:
+    - title: Несовместимые изменения
+      labels:
+        - breaking
+    - title: Новые возможности
+      labels:
+        - enhancement
+    - title: Исправления
+      labels:
+        - bug
+    - title: Документация
+      labels:
+        - documentation
+    - title: Зависимости
+      labels:
+        - dependencies
+    - title: Другие изменения
+      labels:
+        - "*"

@@ -1,0 +1,35 @@
+name: Предложить улучшение
+description: Новый источник, функция или улучшение интерфейса
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Проблема
+      description: Какую задачу сейчас нельзя удобно решить?
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое решение
+      description: Опишите ожидаемое поведение и пример команды.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      description: Какие другие варианты вы рассматривали?
+
+  - type: checkboxes
+    id: protocol
+    attributes:
+      label: Для нового источника
+      description: Заполняется, если предложение добавляет сервис измерения.
+      options:
+        - label: У сервиса есть публично поставляемый официальный протокол.
+        - label: Реализация не требует обхода CAPTCHA или защиты от роботов.
