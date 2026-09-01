@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Публикация релиза
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Получение исходного кода
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Установка Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Проверка тега
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Тег должен иметь вид v1.2.3 или v1.2.3-rc.1" >&2
+            exit 1
+          fi
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Проверка модулей
+        run: go mod verify
+
+      - name: Проверка форматирования
+        run: test -z "$(gofmt -l .)"
+
+      - name: Проверка GitHub Actions
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
+
+      - name: Проверка установщиков
+        shell: bash
+        run: |
+          shellcheck scripts/install.sh
+          pwsh -NoProfile -File ./scripts/install.ps1 -Help
+
+      - name: Десятикратный прогон модульных тестов
+        run: go test -count=10 ./...
+
+      - name: Модульные тесты с детектором гонок
+        run: go test -race -count=1 ./...
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Staticcheck
+        uses: dominikh/staticcheck-action@672a31696676d1592844bf0164b3bbfd855a4d50 # v1.4.1
+        with:
+          version: "2026.1"
+          install-go: false
+
+      - name: Проверка уязвимостей
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod
+          go-package: ./...
+
+      - name: Сборка релизных архивов
+        run: go run ./cmd/release --version "${{ steps.version.outputs.value }}"
+
+      - name: Проверка контрольных сумм
+        working-directory: dist
+        run: sha256sum -c SHA256SUMS.txt
+
+      - name: Аттестация происхождения артефактов
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: dist/SHA256SUMS.txt
+
+      - name: Создание черновика GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          release_options=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_options+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --draft \
+            --verify-tag \
+            --generate-notes \
+            --title "Puls $GITHUB_REF_NAME" \
+            "${release_options[@]}"
+
+      - name: Публикация GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
