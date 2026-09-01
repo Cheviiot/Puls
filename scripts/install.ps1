@@ -134,6 +134,7 @@ $asset = "Puls_${Version}_windows_${targetArch}.zip"
 $releaseUrl = "$RepositoryUrl/releases/download/v$Version"
 $temporaryDir = Join-Path ([IO.Path]::GetTempPath()) ("puls-install-" + [Guid]::NewGuid().ToString("N"))
 $stagedBinary = $null
+$backupBinary = $null
 
 try {
     New-Item -ItemType Directory -Path $temporaryDir | Out-Null
@@ -166,14 +167,27 @@ try {
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     $targetBinary = Join-Path $InstallDir "puls.exe"
+    if (Test-Path -LiteralPath $targetBinary -PathType Container) {
+        throw "$targetBinary является каталогом; установка остановлена."
+    }
+    $installAction = if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
+        "обновлён"
+    } else {
+        "установлен"
+    }
     $stagedBinary = Join-Path $InstallDir (".puls." + [Guid]::NewGuid().ToString("N") + ".exe")
     [IO.File]::Copy($binaryPath, $stagedBinary, $true)
     if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
-        [IO.File]::Replace($stagedBinary, $targetBinary, $null)
+        $backupBinary = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".exe")
+        [IO.File]::Replace($stagedBinary, $targetBinary, $backupBinary)
     } else {
         [IO.File]::Move($stagedBinary, $targetBinary)
     }
     $stagedBinary = $null
+    if ($null -ne $backupBinary -and (Test-Path -LiteralPath $backupBinary)) {
+        Remove-Item -Force -LiteralPath $backupBinary
+    }
+    $backupBinary = $null
 
     if (-not $NoPathUpdate) {
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -198,10 +212,13 @@ try {
         }
     }
 
-    Write-Host "Puls $Version установлен: $targetBinary"
+    Write-Host "Puls $Version ${installAction}: $targetBinary"
 } finally {
     if ($null -ne $stagedBinary -and (Test-Path -LiteralPath $stagedBinary)) {
         Remove-Item -Force -LiteralPath $stagedBinary
+    }
+    if ($null -ne $backupBinary -and (Test-Path -LiteralPath $backupBinary)) {
+        Remove-Item -Force -LiteralPath $backupBinary
     }
     if (Test-Path -LiteralPath $temporaryDir) {
         Remove-Item -Recurse -Force -LiteralPath $temporaryDir
