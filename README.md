@@ -30,9 +30,23 @@ Windows PowerShell:
 irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1|iex
 ```
 
-Скрипты скачиваются только из GitHub Releases, проверяют SHA-256 и не требуют
-прав администратора. Готовый архив можно взять вручную на странице
-[Releases](https://github.com/Cheviiot/Puls/releases).
+Скрипты скачиваются только из GitHub Releases, проверяют SHA-256, сами
+настраивают `PATH` и не требуют прав администратора. В уже открытом Unix-окне
+после первой установки достаточно открыть новую вкладку терминала. Готовый
+архив можно взять вручную на странице [Releases](https://github.com/Cheviiot/Puls/releases).
+
+### Обновление
+
+Повторите команду установки. Puls скачает `releases/latest`, проверит архив и
+атомарно заменит предыдущую версию, не дублируя настройку `PATH`.
+
+```sh
+curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh|sh
+```
+
+```powershell
+irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1|iex
+```
 
 ### Удаление
 

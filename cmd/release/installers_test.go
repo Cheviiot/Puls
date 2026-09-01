@@ -88,6 +88,16 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if !bytes.Equal(installed, binaryContent) {
 		t.Fatalf("installed binary = %q", installed)
 	}
+	command = exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+		"-File", filepath.Join(root, "scripts", "install.ps1"), "-InstallDir", installDir,
+		"-NoPathUpdate", "-RepositoryUrl", server.URL)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("second install.ps1 run failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "обновлён") {
+		t.Fatalf("install.ps1 did not report an update:\n%s", output)
+	}
 	server.Close()
 
 	command = exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
@@ -174,9 +184,35 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	installDir := filepath.Join(directory, "bin")
+	homeDir := filepath.Join(directory, "home")
+	if err := os.Mkdir(homeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profileName := ".bashrc"
+	if runtime.GOOS == "darwin" {
+		profileName = ".bash_profile"
+	}
+	profilePath := filepath.Join(homeDir, profileName)
+	initialProfile := "# user configuration"
+	if err := os.WriteFile(profilePath, []byte(initialProfile), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	installerEnvironment := make([]string, 0, len(os.Environ())+3)
+	for _, variable := range os.Environ() {
+		if strings.HasPrefix(variable, "HOME=") || strings.HasPrefix(variable, "SHELL=") ||
+			strings.HasPrefix(variable, "PULS_INSTALL_REPOSITORY_URL=") {
+			continue
+		}
+		installerEnvironment = append(installerEnvironment, variable)
+	}
+	installerEnvironment = append(installerEnvironment,
+		"HOME="+homeDir,
+		"SHELL=/bin/bash",
+		"PULS_INSTALL_REPOSITORY_URL="+server.URL,
+	)
 	installer := filepath.Join(root, "scripts", "install.sh")
 	command := exec.Command("sh", installer, "--install-dir", installDir)
-	command.Env = append(os.Environ(), "PULS_INSTALL_REPOSITORY_URL="+server.URL)
+	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install.sh failed: %v\n%s", err, output)
 	}
@@ -196,16 +232,80 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if string(output) != "installed\n" {
 		t.Fatalf("installed output = %q", output)
 	}
+	wantProfileLine := initialProfile + fmt.Sprintf("\nexport PATH='%s':\"$PATH\" # Puls installer\n", installDir)
+	profile, err := os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(profile) != wantProfileLine {
+		t.Fatalf("shell profile = %q, want %q", profile, wantProfileLine)
+	}
+
+	command = exec.Command("sh", installer, "--install-dir", installDir)
+	command.Env = installerEnvironment
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("second install.sh run failed: %v\n%s", err, output)
+	} else if !strings.Contains(string(output), "обновлён") {
+		t.Fatalf("install.sh did not report an update:\n%s", output)
+	}
+	profile, err = os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(profile), "# Puls installer") != 1 {
+		t.Fatalf("install.sh duplicated PATH configuration: %q", profile)
+	}
+	savedBinary := installed + ".saved"
+	if err := os.Rename(installed, savedBinary); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(installed, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command.Env = installerEnvironment
+	if output, err := command.CombinedOutput(); err == nil {
+		t.Fatalf("install.sh removed PATH after refusing the binary target:\n%s", output)
+	}
+	profile, err = os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(profile), "# Puls installer") {
+		t.Fatalf("failed uninstall removed PATH configuration: %q", profile)
+	}
+	if err := os.Remove(installed); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(savedBinary, installed); err != nil {
+		t.Fatal(err)
+	}
 	server.Close()
 
 	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install.sh uninstall failed: %v\n%s", err, output)
 	}
 	if _, err := os.Stat(installed); !os.IsNotExist(err) {
 		t.Fatalf("install.sh uninstall left the binary: %v", err)
 	}
+	profile, err = os.ReadFile(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(profile) != initialProfile+"\n" {
+		t.Fatalf("install.sh uninstall changed user profile: %q", profile)
+	}
+	profileInfo, err := os.Stat(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profileInfo.Mode().Perm() != 0o640 {
+		t.Fatalf("shell profile mode = %o, want 0640", profileInfo.Mode().Perm())
+	}
 	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("second install.sh uninstall failed: %v\n%s", err, output)
 	}
@@ -213,6 +313,7 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err == nil {
 		t.Fatalf("install.sh removed a directory at the binary path:\n%s", output)
 	}

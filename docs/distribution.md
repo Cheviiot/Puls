@@ -43,15 +43,19 @@ Windows PowerShell:
 irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 ```
 
-`install.sh` помещает binary в `${XDG_BIN_HOME:-$HOME/.local/bin}` и не требует
-root. `install.ps1` использует `%LOCALAPPDATA%\Programs\Puls\bin` и добавляет
-его в пользовательский `PATH`. Оба установщика:
+`install.sh` помещает binary в `${XDG_BIN_HOME:-$HOME/.local/bin}`, определяет
+текущую оболочку и идемпотентно настраивает `PATH` через `.bashrc`,
+`.bash_profile`, `.zshrc`, `.profile` или отдельный файл Fish. Ручное
+редактирование окружения и root не нужны. `install.ps1` использует
+`%LOCALAPPDATA%\Programs\Puls\bin` и добавляет его в пользовательский `PATH`.
+Оба установщика:
 
 - определяют `amd64` или `arm64`;
 - получают только release assets из `Cheviiot/Puls`;
 - скачивают `SHA256SUMS.txt` для того же immutable tag;
 - проверяют точный SHA-256 до распаковки;
 - устанавливают binary через временный файл;
+- при повторном запуске атомарно обновляют binary до `releases/latest`;
 - не отправляют telemetry и не требуют GitHub token.
 
 После загрузки скрипта удаление не делает дополнительных сетевых запросов и
@@ -65,9 +69,10 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 & ([scriptblock]::Create((irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1))) -Uninstall
 ```
 
-Windows-установщик также удаляет свой каталог из пользовательского `PATH`.
-При нестандартном каталоге передайте его повторно через `--install-dir` или
-`-InstallDir`. Параметр `-NoPathUpdate` оставляет `PATH` без изменений.
+Оба установщика при удалении убирают созданную ими настройку `PATH`. При
+нестандартном каталоге передайте его повторно через `--install-dir` или
+`-InstallDir`. Параметры `--no-path-update` и `-NoPathUpdate` оставляют
+окружение без изменений.
 
 Для конкретной версии используются параметры `--version` и `-Version`:
 
