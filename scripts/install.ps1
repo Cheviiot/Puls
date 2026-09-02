@@ -130,7 +130,7 @@ switch ($architecture.ToUpperInvariant()) {
     default { throw "Неподдерживаемая архитектура $architecture." }
 }
 
-$asset = "Puls_${Version}_windows_${targetArch}.zip"
+$expectedAsset = "Puls_${Version}_windows_${targetArch}.zip"
 $releaseUrl = "$RepositoryUrl/releases/download/v$Version"
 $temporaryDir = Join-Path ([IO.Path]::GetTempPath()) ("puls-install-" + [Guid]::NewGuid().ToString("N"))
 $stagedBinary = $null
@@ -138,8 +138,44 @@ $backupBinary = $null
 
 try {
     New-Item -ItemType Directory -Path $temporaryDir | Out-Null
-    $archivePath = Join-Path $temporaryDir $asset
+    $manifestPath = Join-Path $temporaryDir "RELEASE_MANIFEST.json"
     $checksumsPath = Join-Path $temporaryDir "SHA256SUMS.txt"
+    Invoke-WebRequest -UseBasicParsing -Uri "$releaseUrl/RELEASE_MANIFEST.json" -OutFile $manifestPath
+    $releaseManifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $manifestProperties = @($releaseManifest.PSObject.Properties.Name)
+    foreach ($requiredProperty in @("schema_version", "product", "version", "assets")) {
+        if ($manifestProperties -notcontains $requiredProperty) {
+            throw "RELEASE_MANIFEST.json не содержит поле $requiredProperty."
+        }
+    }
+    if ([int]$releaseManifest.schema_version -ne 1 -or [string]$releaseManifest.product -ne "Puls") {
+        throw "RELEASE_MANIFEST.json имеет неподдерживаемую схему."
+    }
+    if ([string]$releaseManifest.version -ne $Version) {
+        throw "Версия RELEASE_MANIFEST.json не совпадает с запрошенной $Version."
+    }
+    $matchingAssets = @($releaseManifest.assets | Where-Object {
+        $assetProperties = @($_.PSObject.Properties.Name)
+        $assetProperties -contains "os" -and
+            $assetProperties -contains "arch" -and
+            $assetProperties -contains "file" -and
+            $assetProperties -contains "sha256" -and
+            [string]$_.os -eq "windows" -and [string]$_.arch -eq $targetArch
+    })
+    if ($matchingAssets.Count -ne 1) {
+        throw "В RELEASE_MANIFEST.json нет единственного пакета для windows/$targetArch."
+    }
+    $asset = [string]$matchingAssets[0].file
+    $manifestChecksum = [string]$matchingAssets[0].sha256
+    if ($asset -cne $expectedAsset) {
+        throw "RELEASE_MANIFEST.json указывает неожиданный пакет $asset."
+    }
+    if ($manifestChecksum -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "RELEASE_MANIFEST.json содержит некорректный SHA-256."
+    }
+    $manifestChecksum = $manifestChecksum.ToLowerInvariant()
+
+    $archivePath = Join-Path $temporaryDir $asset
 
     Write-Host "Загрузка Puls $Version для windows/$targetArch…"
     Invoke-WebRequest -UseBasicParsing -Uri "$releaseUrl/$asset" -OutFile $archivePath
@@ -153,6 +189,21 @@ try {
         throw "В SHA256SUMS.txt нет единственной корректной записи для $asset."
     }
     $expectedChecksum = $checksumLines[0].Substring(0, 64).ToLowerInvariant()
+    $manifestPattern = [Regex]::Escape("RELEASE_MANIFEST.json")
+    $manifestChecksumLines = @(Get-Content -LiteralPath $checksumsPath | Where-Object {
+        $_ -match "^[0-9A-Fa-f]{64}  $manifestPattern$"
+    })
+    if ($manifestChecksumLines.Count -ne 1) {
+        throw "В SHA256SUMS.txt нет единственной корректной записи для RELEASE_MANIFEST.json."
+    }
+    $expectedManifestChecksum = $manifestChecksumLines[0].Substring(0, 64).ToLowerInvariant()
+    $actualManifestChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant()
+    if ($actualManifestChecksum -ne $expectedManifestChecksum) {
+        throw "Контрольная сумма RELEASE_MANIFEST.json не совпала."
+    }
+    if ($manifestChecksum -ne $expectedChecksum) {
+        throw "SHA-256 пакета различается в manifest и SHA256SUMS.txt."
+    }
     $actualChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
     if ($actualChecksum -ne $expectedChecksum) {
         throw "Контрольная сумма архива не совпала."

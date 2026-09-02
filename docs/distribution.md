@@ -52,8 +52,11 @@ irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 
 - определяют `amd64` или `arm64`;
 - получают только release assets из `Cheviiot/Puls`;
+- выбирают ровно один архив для текущих OS и architecture из
+  `RELEASE_MANIFEST.json` и проверяют ожидаемое имя пакета;
 - скачивают `SHA256SUMS.txt` для того же immutable tag;
-- проверяют точный SHA-256 до распаковки;
+- сверяют SHA-256 пакета между manifest и `SHA256SUMS.txt`, затем проверяют
+  фактически скачанные manifest и архив до распаковки;
 - устанавливают binary через временный файл;
 - при повторном запуске атомарно обновляют binary до `releases/latest`;
 - не отправляют telemetry и не требуют GitHub token.
