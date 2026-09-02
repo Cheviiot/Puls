@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 )
 
-func TestPowerShellInstallerIsUTF8WithoutBOM(t *testing.T) {
+func TestPowerShellInstallerIsASCIIWithoutBOM(t *testing.T) {
 	root, err := findProjectRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +30,11 @@ func TestPowerShellInstallerIsUTF8WithoutBOM(t *testing.T) {
 	}
 	if !utf8.Valid(content) {
 		t.Fatal("install.ps1 is not valid UTF-8")
+	}
+	for offset, value := range content {
+		if value > 0x7f {
+			t.Fatalf("install.ps1 byte %d is non-ASCII and will be corrupted by Windows PowerShell 5", offset)
+		}
 	}
 }
 
@@ -57,6 +62,15 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	installerContent, err := os.ReadFile(filepath.Join(root, "scripts", "install.ps1"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	helpCommand := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+		"-File", filepath.Join(root, "scripts", "install.ps1"), "-Help")
+	helpOutput, err := helpCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("direct install.ps1 help failed: %v\n%s", err, helpOutput)
+	}
+	if !strings.Contains(string(helpOutput), "Установка и удаление Puls") {
+		t.Fatalf("direct install.ps1 help lost Russian text:\n%s", helpOutput)
 	}
 
 	const version = "1.2.3"
