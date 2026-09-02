@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 )
 
-func TestPowerShellInstallerIsUTF8WithBOM(t *testing.T) {
+func TestPowerShellInstallerIsUTF8WithoutBOM(t *testing.T) {
 	root, err := findProjectRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -25,8 +25,8 @@ func TestPowerShellInstallerIsUTF8WithBOM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}) {
-		t.Fatal("install.ps1 needs an UTF-8 BOM for direct execution in Windows PowerShell 5")
+	if bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}) {
+		t.Fatal("install.ps1 BOM breaks irm | iex in Windows PowerShell 5")
 	}
 	if !utf8.Valid(content) {
 		t.Fatal("install.ps1 is not valid UTF-8")
@@ -200,7 +200,7 @@ func TestPowerShellInstallerRejectsWrongManifestPackage(t *testing.T) {
 	if err == nil {
 		t.Fatalf("install.ps1 accepted a wrong manifest package:\n%s", output)
 	}
-	if !strings.Contains(string(output), "указывает неожиданный пакет") {
+	if !strings.Contains(string(output), "RELEASE_MANIFEST.json") || !strings.Contains(string(output), wrongName) {
 		t.Fatalf("unexpected install.ps1 error:\n%s", output)
 	}
 	if _, statErr := os.Stat(filepath.Join(installDir, "puls.exe")); !os.IsNotExist(statErr) {

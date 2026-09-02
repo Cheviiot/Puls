@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Version = "",
     [string]$InstallDir = $env:PULS_INSTALL_DIR,
