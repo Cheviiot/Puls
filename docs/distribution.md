@@ -49,6 +49,8 @@ irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 редактирование окружения и root не нужны. `install.ps1` использует
 `%LOCALAPPDATA%\Programs\Puls\bin` и добавляет его в пользовательский `PATH`.
 Нестандартный каталог выбирается только явным параметром пользователя.
+Для автоматизации оба установщика также принимают явный override через
+`PULS_INSTALL_DIR`.
 Оба установщика:
 
 - определяют `amd64` или `arm64`;
@@ -110,6 +112,10 @@ Installer:     install.sh / install.ps1
 - `install.sh` и `install.ps1` как отдельные release assets;
 - `RELEASE_MANIFEST.json` с точными архивами, OS, architecture и SHA-256;
 - `SHA256SUMS.txt` для архивов, manifest и обоих установщиков.
+
+`install.ps1` хранится без UTF-8 BOM и загружается в GitHub Release с
+`Content-Type: text/plain; charset=utf-8`. Это обязательная часть контракта:
+иначе Windows PowerShell 5 повреждает первую строку и кириллицу при `irm | iex`.
 
 Каждый архив содержит binary, лицензию, changelog и полный комплект публичной
 Markdown-документации. Сборка выполняется с `CGO_ENABLED=0`, `-trimpath` и

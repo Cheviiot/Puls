@@ -13,7 +13,25 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func TestPowerShellInstallerIsUTF8WithoutBOM(t *testing.T) {
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "scripts", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}) {
+		t.Fatal("install.ps1 contains an UTF-8 BOM that breaks irm | iex in Windows PowerShell")
+	}
+	if !utf8.Valid(content) {
+		t.Fatal("install.ps1 is not valid UTF-8")
+	}
+}
 
 func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if runtime.GOOS != "windows" {
@@ -23,7 +41,7 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		t.Skip("install.ps1 supports amd64 and arm64")
 	}
 	powerShell := ""
-	for _, candidate := range []string{"pwsh.exe", "powershell.exe"} {
+	for _, candidate := range []string{"powershell.exe", "pwsh.exe"} {
 		if path, err := exec.LookPath(candidate); err == nil {
 			powerShell = path
 			break
@@ -31,6 +49,14 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	}
 	if powerShell == "" {
 		t.Skip("PowerShell is unavailable")
+	}
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installerContent, err := os.ReadFile(filepath.Join(root, "scripts", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	const version = "1.2.3"
@@ -67,22 +93,28 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		case releaseManifestName:
 			response.Header().Set("Content-Type", "application/json")
 			_, _ = response.Write(manifest)
+		case "install.ps1":
+			response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = response.Write(installerContent)
 		default:
 			http.NotFound(response, request)
 		}
 	}))
 	defer server.Close()
 
-	root, err := findProjectRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
 	installDir := filepath.Join(directory, "bin")
-	command := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
-		"-File", filepath.Join(root, "scripts", "install.ps1"), "-InstallDir", installDir,
-		"-NoPathUpdate", "-RepositoryUrl", server.URL)
+	newInstallCommand := func() *exec.Cmd {
+		command := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+			"Invoke-RestMethod -UseBasicParsing -Uri '"+server.URL+"/install.ps1' | Invoke-Expression")
+		command.Env = append(os.Environ(),
+			"PULS_INSTALL_DIR="+installDir,
+			"PULS_INSTALL_REPOSITORY_URL="+server.URL,
+		)
+		return command
+	}
+	command := newInstallCommand()
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("install.ps1 failed: %v\n%s", err, output)
+		t.Fatalf("irm | iex install.ps1 failed: %v\n%s", err, output)
 	}
 	installed, err := os.ReadFile(filepath.Join(installDir, "puls.exe"))
 	if err != nil {
@@ -91,9 +123,7 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if !bytes.Equal(installed, binaryContent) {
 		t.Fatalf("installed binary = %q", installed)
 	}
-	command = exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
-		"-File", filepath.Join(root, "scripts", "install.ps1"), "-InstallDir", installDir,
-		"-NoPathUpdate", "-RepositoryUrl", server.URL)
+	command = newInstallCommand()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("second install.ps1 run failed: %v\n%s", err, output)
@@ -105,7 +135,7 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 
 	command = exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
 		"-File", filepath.Join(root, "scripts", "install.ps1"), "-Uninstall",
-		"-InstallDir", installDir, "-NoPathUpdate")
+		"-InstallDir", installDir)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install.ps1 uninstall failed: %v\n%s", err, output)
 	}
@@ -135,7 +165,7 @@ func TestPowerShellInstallerRejectsWrongManifestPackage(t *testing.T) {
 		t.Skip("install.ps1 supports amd64 and arm64")
 	}
 	powerShell := ""
-	for _, candidate := range []string{"pwsh.exe", "powershell.exe"} {
+	for _, candidate := range []string{"powershell.exe", "pwsh.exe"} {
 		if path, err := exec.LookPath(candidate); err == nil {
 			powerShell = path
 			break

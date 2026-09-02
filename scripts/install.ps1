@@ -1,7 +1,7 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Version = "",
-    [string]$InstallDir = "",
+    [string]$InstallDir = $env:PULS_INSTALL_DIR,
     [switch]$NoPathUpdate,
     [switch]$Uninstall,
     [switch]$Help,
