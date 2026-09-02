@@ -11,6 +11,8 @@
 - Установщики Linux, macOS и Windows выбирают пакет строго по OS и architecture
   из `RELEASE_MANIFEST.json`, сверяют его digest с `SHA256SUMS.txt` и проверяют
   контрольные суммы manifest и архива до распаковки.
+- Unix-установщик без явного override всегда использует `$HOME/.local/bin`, а
+  Windows-установщик — `%LOCALAPPDATA%\Programs\Puls\bin`.
 - Unix-установщик извлекает из архива только ожидаемый обычный файл `puls`.
 
 ## [0.1.1] - 2026-09-02

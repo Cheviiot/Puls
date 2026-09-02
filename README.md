@@ -36,6 +36,10 @@ irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1|iex
 установки достаточно открыть новую вкладку терминала. Готовый архив можно взять
 вручную на странице [Releases](https://github.com/Cheviiot/Puls/releases).
 
+Стандартный каталог установки — `~/.local/bin` на Linux и macOS и
+`%LOCALAPPDATA%\Programs\Puls\bin` на Windows. Другой путь используется только
+при явном указании `--install-dir` или `-InstallDir`.
+
 ### Обновление
 
 Повторите команду установки. Puls скачает `releases/latest`, проверит архив и

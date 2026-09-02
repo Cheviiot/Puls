@@ -43,11 +43,12 @@ Windows PowerShell:
 irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 ```
 
-`install.sh` помещает binary в `${XDG_BIN_HOME:-$HOME/.local/bin}`, определяет
-текущую оболочку и идемпотентно настраивает `PATH` через `.bashrc`,
+`install.sh` помещает binary в `$HOME/.local/bin`, определяет текущую оболочку и
+идемпотентно настраивает `PATH` через `.bashrc`,
 `.bash_profile`, `.zshrc`, `.profile` или отдельный файл Fish. Ручное
 редактирование окружения и root не нужны. `install.ps1` использует
 `%LOCALAPPDATA%\Programs\Puls\bin` и добавляет его в пользовательский `PATH`.
+Нестандартный каталог выбирается только явным параметром пользователя.
 Оба установщика:
 
 - определяют `amd64` или `arm64`;

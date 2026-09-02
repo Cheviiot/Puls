@@ -224,16 +224,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$install_dir" ]; then
-  if [ -n "${XDG_BIN_HOME:-}" ]; then
-    install_dir=$XDG_BIN_HOME
-  elif [ -n "${HOME:-}" ]; then
+  if [ -n "${HOME:-}" ]; then
     install_dir=$HOME/.local/bin
-    for candidate_dir in "$HOME/.local/bin" "$HOME/bin"; do
-      if path_contains "$candidate_dir"; then
-        install_dir=$candidate_dir
-        break
-      fi
-    done
   else
     fail "не задан HOME; укажите каталог через --install-dir"
   fi
