@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Version = "",
     [string]$InstallDir = $env:PULS_INSTALL_DIR,
@@ -29,6 +29,22 @@ function Show-Usage {
   -Uninstall            удалить Puls и запись из пользовательского PATH
   -Help                 показать эту справку
 "@
+}
+
+function Get-SHA256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            return (($algorithm.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "")
+        } finally {
+            $algorithm.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
 }
 
 if ($Help) {
@@ -197,14 +213,14 @@ try {
         throw "В SHA256SUMS.txt нет единственной корректной записи для RELEASE_MANIFEST.json."
     }
     $expectedManifestChecksum = $manifestChecksumLines[0].Substring(0, 64).ToLowerInvariant()
-    $actualManifestChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash.ToLowerInvariant()
+    $actualManifestChecksum = Get-SHA256 -Path $manifestPath
     if ($actualManifestChecksum -ne $expectedManifestChecksum) {
         throw "Контрольная сумма RELEASE_MANIFEST.json не совпала."
     }
     if ($manifestChecksum -ne $expectedChecksum) {
         throw "SHA-256 пакета различается в manifest и SHA256SUMS.txt."
     }
-    $actualChecksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant()
+    $actualChecksum = Get-SHA256 -Path $archivePath
     if ($actualChecksum -ne $expectedChecksum) {
         throw "Контрольная сумма архива не совпала."
     }

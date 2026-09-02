@@ -113,9 +113,10 @@ Installer:     install.sh / install.ps1
 - `RELEASE_MANIFEST.json` с точными архивами, OS, architecture и SHA-256;
 - `SHA256SUMS.txt` для архивов, manifest и обоих установщиков.
 
-`install.ps1` хранится без UTF-8 BOM и загружается в GitHub Release с
-`Content-Type: text/plain; charset=utf-8`. Это обязательная часть контракта:
-иначе Windows PowerShell 5 повреждает первую строку и кириллицу при `irm | iex`.
+`install.ps1` хранится как UTF-8 с BOM для прямого запуска в Windows PowerShell
+5 и загружается в GitHub Release с `Content-Type: text/plain; charset=utf-8`.
+Обе части обязательны: иначе PowerShell повреждает первую строку или кириллицу
+при `irm | iex` и запуске скачанного файла.
 
 Каждый архив содержит binary, лицензию, changelog и полный комплект публичной
 Markdown-документации. Сборка выполняется с `CGO_ENABLED=0`, `-trimpath` и

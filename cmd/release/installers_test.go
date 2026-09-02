@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 )
 
-func TestPowerShellInstallerIsUTF8WithoutBOM(t *testing.T) {
+func TestPowerShellInstallerIsUTF8WithBOM(t *testing.T) {
 	root, err := findProjectRoot()
 	if err != nil {
 		t.Fatal(err)
@@ -25,8 +25,8 @@ func TestPowerShellInstallerIsUTF8WithoutBOM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}) {
-		t.Fatal("install.ps1 contains an UTF-8 BOM that breaks irm | iex in Windows PowerShell")
+	if !bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}) {
+		t.Fatal("install.ps1 needs an UTF-8 BOM for direct execution in Windows PowerShell 5")
 	}
 	if !utf8.Valid(content) {
 		t.Fatal("install.ps1 is not valid UTF-8")
