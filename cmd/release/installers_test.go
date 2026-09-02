@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +13,30 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func TestPowerShellInstallerIsASCIIWithoutBOM(t *testing.T) {
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "scripts", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.HasPrefix(content, []byte{0xef, 0xbb, 0xbf}) {
+		t.Fatal("install.ps1 BOM breaks irm | iex in Windows PowerShell 5")
+	}
+	if !utf8.Valid(content) {
+		t.Fatal("install.ps1 is not valid UTF-8")
+	}
+	for offset, value := range content {
+		if value > 0x7f {
+			t.Fatalf("install.ps1 byte %d is non-ASCII and will be corrupted by Windows PowerShell 5", offset)
+		}
+	}
+}
 
 func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if runtime.GOOS != "windows" {
@@ -22,7 +46,7 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		t.Skip("install.ps1 supports amd64 and arm64")
 	}
 	powerShell := ""
-	for _, candidate := range []string{"pwsh.exe", "powershell.exe"} {
+	for _, candidate := range []string{"powershell.exe", "pwsh.exe"} {
 		if path, err := exec.LookPath(candidate); err == nil {
 			powerShell = path
 			break
@@ -30,6 +54,23 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	}
 	if powerShell == "" {
 		t.Skip("PowerShell is unavailable")
+	}
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installerContent, err := os.ReadFile(filepath.Join(root, "scripts", "install.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	helpCommand := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+		"-File", filepath.Join(root, "scripts", "install.ps1"), "-Help")
+	helpOutput, err := helpCommand.CombinedOutput()
+	if err != nil {
+		t.Fatalf("direct install.ps1 help failed: %v\n%s", err, helpOutput)
+	}
+	if !strings.Contains(string(helpOutput), "Установка и удаление Puls") {
+		t.Fatalf("direct install.ps1 help lost Russian text:\n%s", helpOutput)
 	}
 
 	const version = "1.2.3"
@@ -53,7 +94,9 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(archive)
-	checksums := fmt.Sprintf("%x  %s\n", digest, archiveName)
+	manifest := testReleaseManifest(t, version, "windows", runtime.GOARCH, archiveName, digest)
+	manifestDigest := sha256.Sum256(manifest)
+	checksums := fmt.Sprintf("%x  %s\n%x  %s\n", digest, archiveName, manifestDigest, releaseManifestName)
 
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch filepath.Base(request.URL.Path) {
@@ -63,23 +106,29 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 			_, _ = response.Write([]byte(checksums))
 		case releaseManifestName:
 			response.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(response, `{"schema_version":1,"product":"Puls","version":%q}`, version)
+			_, _ = response.Write(manifest)
+		case "install.ps1":
+			response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			_, _ = response.Write(installerContent)
 		default:
 			http.NotFound(response, request)
 		}
 	}))
 	defer server.Close()
 
-	root, err := findProjectRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
 	installDir := filepath.Join(directory, "bin")
-	command := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
-		"-File", filepath.Join(root, "scripts", "install.ps1"), "-InstallDir", installDir,
-		"-NoPathUpdate", "-RepositoryUrl", server.URL)
+	newInstallCommand := func() *exec.Cmd {
+		command := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+			"Invoke-RestMethod -UseBasicParsing -Uri '"+server.URL+"/install.ps1' | Invoke-Expression")
+		command.Env = append(os.Environ(),
+			"PULS_INSTALL_DIR="+installDir,
+			"PULS_INSTALL_REPOSITORY_URL="+server.URL,
+		)
+		return command
+	}
+	command := newInstallCommand()
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("install.ps1 failed: %v\n%s", err, output)
+		t.Fatalf("irm | iex install.ps1 failed: %v\n%s", err, output)
 	}
 	installed, err := os.ReadFile(filepath.Join(installDir, "puls.exe"))
 	if err != nil {
@@ -88,9 +137,7 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if !bytes.Equal(installed, binaryContent) {
 		t.Fatalf("installed binary = %q", installed)
 	}
-	command = exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
-		"-File", filepath.Join(root, "scripts", "install.ps1"), "-InstallDir", installDir,
-		"-NoPathUpdate", "-RepositoryUrl", server.URL)
+	command = newInstallCommand()
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("second install.ps1 run failed: %v\n%s", err, output)
@@ -102,7 +149,7 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 
 	command = exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
 		"-File", filepath.Join(root, "scripts", "install.ps1"), "-Uninstall",
-		"-InstallDir", installDir, "-NoPathUpdate")
+		"-InstallDir", installDir)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install.ps1 uninstall failed: %v\n%s", err, output)
 	}
@@ -121,6 +168,57 @@ func TestPowerShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	}
 	if info, err := os.Stat(directoryAtBinaryPath); err != nil || !info.IsDir() {
 		t.Fatalf("directory at binary path was changed: %v, %v", info, err)
+	}
+}
+
+func TestPowerShellInstallerRejectsWrongManifestPackage(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("install.ps1 is intended for Windows")
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skip("install.ps1 supports amd64 and arm64")
+	}
+	powerShell := ""
+	for _, candidate := range []string{"powershell.exe", "pwsh.exe"} {
+		if path, err := exec.LookPath(candidate); err == nil {
+			powerShell = path
+			break
+		}
+	}
+	if powerShell == "" {
+		t.Skip("PowerShell is unavailable")
+	}
+
+	const version = "1.2.3"
+	wrongName := fmt.Sprintf("Puls_%s_windows_%s-wrong.zip", version, runtime.GOARCH)
+	manifest := testReleaseManifest(t, version, "windows", runtime.GOARCH, wrongName, [sha256.Size]byte{})
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if filepath.Base(request.URL.Path) == releaseManifestName {
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write(manifest)
+			return
+		}
+		http.NotFound(response, request)
+	}))
+	defer server.Close()
+
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installDir := filepath.Join(t.TempDir(), "bin")
+	command := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+		"-File", filepath.Join(root, "scripts", "install.ps1"), "-Version", version,
+		"-InstallDir", installDir, "-NoPathUpdate", "-RepositoryUrl", server.URL)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("install.ps1 accepted a wrong manifest package:\n%s", output)
+	}
+	if !strings.Contains(string(output), "RELEASE_MANIFEST.json") || !strings.Contains(string(output), wrongName) {
+		t.Fatalf("unexpected install.ps1 error:\n%s", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(installDir, "puls.exe")); !os.IsNotExist(statErr) {
+		t.Fatalf("installer left a binary after manifest failure: %v", statErr)
 	}
 }
 
@@ -157,22 +255,19 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(archive)
-	checksums := fmt.Sprintf("%x  %s\n", digest, archiveName)
+	manifest := testReleaseManifest(t, version, runtime.GOOS, runtime.GOARCH, archiveName, digest)
+	manifestDigest := sha256.Sum256(manifest)
+	checksums := fmt.Sprintf("%x  %s\n%x  %s\n", digest, archiveName, manifestDigest, releaseManifestName)
 
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/releases/latest" {
-			http.Redirect(response, request, "/releases/tag/v"+version, http.StatusFound)
-			return
-		}
-		if request.URL.Path == "/releases/tag/v"+version {
-			_, _ = response.Write([]byte("release"))
-			return
-		}
 		switch filepath.Base(request.URL.Path) {
 		case archiveName:
 			_, _ = response.Write(archive)
 		case "SHA256SUMS.txt":
 			_, _ = response.Write([]byte(checksums))
+		case releaseManifestName:
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write(manifest)
 		default:
 			http.NotFound(response, request)
 		}
@@ -183,11 +278,11 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	installDir := filepath.Join(directory, "bin")
 	homeDir := filepath.Join(directory, "home")
 	if err := os.Mkdir(homeDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	installDir := filepath.Join(homeDir, ".local", "bin")
 	profileName := ".bashrc"
 	if runtime.GOOS == "darwin" {
 		profileName = ".bash_profile"
@@ -211,7 +306,7 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		"PULS_INSTALL_REPOSITORY_URL="+server.URL,
 	)
 	installer := filepath.Join(root, "scripts", "install.sh")
-	command := exec.Command("sh", installer, "--install-dir", installDir)
+	command := exec.Command("sh", installer)
 	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install.sh failed: %v\n%s", err, output)
@@ -241,7 +336,7 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 		t.Fatalf("shell profile = %q, want %q", profile, wantProfileLine)
 	}
 
-	command = exec.Command("sh", installer, "--install-dir", installDir)
+	command = exec.Command("sh", installer)
 	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("second install.sh run failed: %v\n%s", err, output)
@@ -262,7 +357,7 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if err := os.Mkdir(installed, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command = exec.Command("sh", installer, "--uninstall")
 	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err == nil {
 		t.Fatalf("install.sh removed PATH after refusing the binary target:\n%s", output)
@@ -282,7 +377,7 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	}
 	server.Close()
 
-	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command = exec.Command("sh", installer, "--uninstall")
 	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("install.sh uninstall failed: %v\n%s", err, output)
@@ -304,7 +399,7 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if profileInfo.Mode().Perm() != 0o640 {
 		t.Fatalf("shell profile mode = %o, want 0640", profileInfo.Mode().Perm())
 	}
-	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command = exec.Command("sh", installer, "--uninstall")
 	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("second install.sh uninstall failed: %v\n%s", err, output)
@@ -312,7 +407,7 @@ func TestShellInstallerDownloadsVerifiesAndInstalls(t *testing.T) {
 	if err := os.Mkdir(installed, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	command = exec.Command("sh", installer, "--uninstall", "--install-dir", installDir)
+	command = exec.Command("sh", installer, "--uninstall")
 	command.Env = installerEnvironment
 	if output, err := command.CombinedOutput(); err == nil {
 		t.Fatalf("install.sh removed a directory at the binary path:\n%s", output)
@@ -337,12 +432,18 @@ func TestShellInstallerRejectsChecksumMismatch(t *testing.T) {
 
 	const version = "1.2.3"
 	archiveName := fmt.Sprintf("Puls_%s_%s_%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)
+	zeroDigest := [sha256.Size]byte{}
+	manifest := testReleaseManifest(t, version, runtime.GOOS, runtime.GOARCH, archiveName, zeroDigest)
+	manifestDigest := sha256.Sum256(manifest)
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		switch filepath.Base(request.URL.Path) {
 		case archiveName:
 			_, _ = response.Write([]byte("not an archive"))
 		case "SHA256SUMS.txt":
-			_, _ = fmt.Fprintf(response, "%064d  %s\n", 0, archiveName)
+			_, _ = fmt.Fprintf(response, "%064d  %s\n%x  %s\n", 0, archiveName, manifestDigest, releaseManifestName)
+		case releaseManifestName:
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write(manifest)
 		default:
 			http.NotFound(response, request)
 		}
@@ -367,4 +468,66 @@ func TestShellInstallerRejectsChecksumMismatch(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(installDir, "puls")); !os.IsNotExist(statErr) {
 		t.Fatalf("installer left a binary after checksum failure: %v", statErr)
 	}
+}
+
+func TestShellInstallerRejectsWrongManifestPackage(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is intended for Linux and macOS")
+	}
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		t.Skip("install.sh supports amd64 and arm64")
+	}
+	for _, command := range []string{"sh", "curl", "tar"} {
+		if _, err := exec.LookPath(command); err != nil {
+			t.Skipf("%s is unavailable: %v", command, err)
+		}
+	}
+
+	const version = "1.2.3"
+	wrongName := fmt.Sprintf("Puls_%s_%s_%s-wrong.tar.gz", version, runtime.GOOS, runtime.GOARCH)
+	manifest := testReleaseManifest(t, version, runtime.GOOS, runtime.GOARCH, wrongName, [sha256.Size]byte{})
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if filepath.Base(request.URL.Path) == releaseManifestName {
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write(manifest)
+			return
+		}
+		http.NotFound(response, request)
+	}))
+	defer server.Close()
+
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	installDir := filepath.Join(t.TempDir(), "bin")
+	command := exec.Command("sh", filepath.Join(root, "scripts", "install.sh"),
+		"--version", version, "--install-dir", installDir)
+	command.Env = append(os.Environ(), "PULS_INSTALL_REPOSITORY_URL="+server.URL)
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("install.sh accepted a wrong manifest package:\n%s", output)
+	}
+	if !strings.Contains(string(output), "указывает неожиданный пакет") {
+		t.Fatalf("unexpected install.sh error:\n%s", output)
+	}
+	if _, statErr := os.Stat(filepath.Join(installDir, "puls")); !os.IsNotExist(statErr) {
+		t.Fatalf("installer left a binary after manifest failure: %v", statErr)
+	}
+}
+
+func testReleaseManifest(t *testing.T, version, targetOS, targetArch, name string, digest [sha256.Size]byte) []byte {
+	t.Helper()
+	payload, err := json.MarshalIndent(releaseManifest{
+		SchemaVersion: 1,
+		Product:       "Puls",
+		Version:       version,
+		Assets: []releaseManifestAsset{{
+			OS: targetOS, Arch: targetArch, File: name, SHA256: fmt.Sprintf("%x", digest),
+		}},
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(payload, '\n')
 }

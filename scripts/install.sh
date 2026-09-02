@@ -224,16 +224,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$install_dir" ]; then
-  if [ -n "${XDG_BIN_HOME:-}" ]; then
-    install_dir=$XDG_BIN_HOME
-  elif [ -n "${HOME:-}" ]; then
+  if [ -n "${HOME:-}" ]; then
     install_dir=$HOME/.local/bin
-    for candidate_dir in "$HOME/.local/bin" "$HOME/bin"; do
-      if path_contains "$candidate_dir"; then
-        install_dir=$candidate_dir
-        break
-      fi
-    done
   else
     fail "не задан HOME; укажите каталог через --install-dir"
   fi
@@ -300,17 +292,6 @@ download() {
   fi
 }
 
-latest_url() {
-  if [ "$secure_download" -eq 1 ]; then
-    curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-      --output /dev/null --write-out '%{url_effective}' \
-      "$repository_url/releases/latest"
-  else
-    curl --fail --silent --show-error --location --output /dev/null \
-      --write-out '%{url_effective}' "$repository_url/releases/latest"
-  fi
-}
-
 case $(uname -s) in
   Linux) target_os=linux ;;
   Darwin) target_os=darwin ;;
@@ -326,23 +307,111 @@ case $(uname -m) in
 esac
 
 if [ -z "$version" ]; then
-  resolved_url=$(latest_url) || fail "не удалось определить последний релиз"
-  tag=${resolved_url%/}
-  tag=${tag##*/}
-  version=${tag#v}
+  manifest_url="$repository_url/releases/latest/download/RELEASE_MANIFEST.json"
 else
   version=${version#v}
+  manifest_url="$repository_url/releases/download/v${version}/RELEASE_MANIFEST.json"
 fi
 
-case "$version" in
-  ""|.|..|*[!0-9A-Za-z._-]*) fail "некорректная версия $version" ;;
-esac
+if [ -n "$version" ]; then
+  case "$version" in
+    .|..|*[!0-9A-Za-z._-]*) fail "некорректная версия $version" ;;
+  esac
+fi
 
-asset="Puls_${version}_${target_os}_${target_arch}.tar.gz"
-release_url="$repository_url/releases/download/v${version}"
 temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/puls-install.XXXXXXXX") || \
   fail "не удалось создать временный каталог"
+manifest_path=$temporary_dir/RELEASE_MANIFEST.json
+download "$manifest_url" "$manifest_path" || \
+  fail "не удалось скачать RELEASE_MANIFEST.json"
 
+manifest_value() {
+  manifest_key=$1
+  awk -v key="\"${manifest_key}\":" '
+    $1 == key {
+      value = $2
+      sub(/,$/, "", value)
+      sub(/^"/, "", value)
+      sub(/"$/, "", value)
+      print value
+      count++
+    }
+    END { if (count != 1) exit 1 }
+  ' "$manifest_path"
+}
+
+manifest_schema=$(manifest_value schema_version) || \
+  fail "RELEASE_MANIFEST.json имеет некорректную schema"
+manifest_product=$(manifest_value product) || \
+  fail "RELEASE_MANIFEST.json не содержит product"
+manifest_version=$(manifest_value version) || \
+  fail "RELEASE_MANIFEST.json не содержит version"
+if [ "$manifest_schema" != 1 ] || [ "$manifest_product" != Puls ]; then
+  fail "RELEASE_MANIFEST.json имеет неподдерживаемую schema"
+fi
+
+case "$manifest_version" in
+  ""|.|..|*[!0-9A-Za-z._-]*) \
+    fail "RELEASE_MANIFEST.json содержит некорректную version" ;;
+esac
+if [ -z "$version" ]; then
+  version=$manifest_version
+elif [ "$manifest_version" != "$version" ]; then
+  fail "версия RELEASE_MANIFEST.json не совпадает с запрошенной $version"
+fi
+
+if ! manifest_asset=$(awk -v wanted_os="$target_os" -v wanted_arch="$target_arch" '
+  function reset_asset() {
+    asset_os = ""
+    asset_arch = ""
+    asset_file = ""
+    asset_sha = ""
+    os_count = arch_count = file_count = sha_count = 0
+  }
+  function string_value(line, value) {
+    value = line
+    sub(/^[[:space:]]*"[^"]+":[[:space:]]*"/, "", value)
+    sub(/",?[[:space:]]*$/, "", value)
+    return value
+  }
+  $1 == "\"assets\":" && $2 == "[" { in_assets = 1; next }
+  in_assets && /^[[:space:]]*\{[[:space:]]*$/ {
+    if (in_asset) invalid = 1
+    in_asset = 1
+    reset_asset()
+    next
+  }
+  in_asset && $1 == "\"os\":" { asset_os = string_value($0); os_count++; next }
+  in_asset && $1 == "\"arch\":" { asset_arch = string_value($0); arch_count++; next }
+  in_asset && $1 == "\"file\":" { asset_file = string_value($0); file_count++; next }
+  in_asset && $1 == "\"sha256\":" { asset_sha = string_value($0); sha_count++; next }
+  in_asset && /^[[:space:]]*\},?[[:space:]]*$/ {
+    if (os_count != 1 || arch_count != 1 || file_count != 1 || sha_count != 1) invalid = 1
+    if (asset_os == wanted_os && asset_arch == wanted_arch) {
+      print asset_file " " asset_sha
+      matches++
+    }
+    in_asset = 0
+    next
+  }
+  in_assets && /^[[:space:]]*\][[:space:]]*$/ { in_assets = 0 }
+  END { if (invalid || in_asset || in_assets || matches != 1) exit 1 }
+' "$manifest_path"); then
+  fail "в RELEASE_MANIFEST.json нет единственного пакета для ${target_os}/${target_arch}"
+fi
+
+asset=${manifest_asset%% *}
+manifest_checksum=${manifest_asset#* }
+expected_asset="Puls_${version}_${target_os}_${target_arch}.tar.gz"
+[ "$asset" = "$expected_asset" ] || \
+  fail "RELEASE_MANIFEST.json указывает неожиданный пакет $asset"
+case "$manifest_checksum" in
+  *[!0-9A-Fa-f]*) fail "RELEASE_MANIFEST.json содержит некорректный SHA-256" ;;
+esac
+[ "${#manifest_checksum}" -eq 64 ] || \
+  fail "RELEASE_MANIFEST.json содержит некорректный SHA-256"
+
+release_url="$repository_url/releases/download/v${version}"
 archive_path=$temporary_dir/$asset
 checksums_path=$temporary_dir/SHA256SUMS.txt
 say "Загрузка Puls ${version} для ${target_os}/${target_arch}..."
@@ -350,30 +419,56 @@ download "$release_url/$asset" "$archive_path" || fail "не удалось ск
 download "$release_url/SHA256SUMS.txt" "$checksums_path" || \
   fail "не удалось скачать SHA256SUMS.txt"
 
-checksum_count=$(awk -v name="$asset" '$2 == name { count++ } END { print count + 0 }' "$checksums_path")
-[ "$checksum_count" -eq 1 ] || fail "в SHA256SUMS.txt нет единственной записи для $asset"
-expected_checksum=$(awk -v name="$asset" '$2 == name { print $1 }' "$checksums_path")
-case "$expected_checksum" in
-  *[!0-9A-Fa-f]*) fail "в SHA256SUMS.txt указан некорректный SHA-256" ;;
-esac
-[ "${#expected_checksum}" -eq 64 ] || fail "в SHA256SUMS.txt указан некорректный SHA-256"
+checksum_for() {
+  checksum_name=$1
+  awk -v name="$checksum_name" '
+    $2 == name && NF == 2 { print $1; count++ }
+    END { if (count != 1) exit 1 }
+  ' "$checksums_path"
+}
+
+expected_checksum=$(checksum_for "$asset") || \
+  fail "в SHA256SUMS.txt нет единственной записи для $asset"
+expected_manifest_checksum=$(checksum_for RELEASE_MANIFEST.json) || \
+  fail "в SHA256SUMS.txt нет единственной записи для RELEASE_MANIFEST.json"
+for listed_checksum in "$expected_checksum" "$expected_manifest_checksum"; do
+  case "$listed_checksum" in
+    *[!0-9A-Fa-f]*) fail "в SHA256SUMS.txt указан некорректный SHA-256" ;;
+  esac
+  [ "${#listed_checksum}" -eq 64 ] || \
+    fail "в SHA256SUMS.txt указан некорректный SHA-256"
+done
 
 if command -v sha256sum >/dev/null 2>&1; then
   actual_checksum=$(sha256sum "$archive_path" | awk '{ print $1 }')
+  actual_manifest_checksum=$(sha256sum "$manifest_path" | awk '{ print $1 }')
 elif command -v shasum >/dev/null 2>&1; then
   actual_checksum=$(shasum -a 256 "$archive_path" | awk '{ print $1 }')
+  actual_manifest_checksum=$(shasum -a 256 "$manifest_path" | awk '{ print $1 }')
 else
   fail "не найден sha256sum или shasum"
 fi
 expected_checksum=$(printf '%s' "$expected_checksum" | tr '[:upper:]' '[:lower:]')
+expected_manifest_checksum=$(printf '%s' "$expected_manifest_checksum" | tr '[:upper:]' '[:lower:]')
+manifest_checksum=$(printf '%s' "$manifest_checksum" | tr '[:upper:]' '[:lower:]')
 actual_checksum=$(printf '%s' "$actual_checksum" | tr '[:upper:]' '[:lower:]')
+actual_manifest_checksum=$(printf '%s' "$actual_manifest_checksum" | tr '[:upper:]' '[:lower:]')
+[ "$actual_manifest_checksum" = "$expected_manifest_checksum" ] || \
+  fail "контрольная сумма RELEASE_MANIFEST.json не совпала"
+[ "$manifest_checksum" = "$expected_checksum" ] || \
+  fail "SHA-256 пакета различается в manifest и SHA256SUMS.txt"
 [ "$actual_checksum" = "$expected_checksum" ] || fail "контрольная сумма архива не совпала"
 
 extract_dir=$temporary_dir/extracted
 mkdir -p "$extract_dir"
-tar -xzf "$archive_path" -C "$extract_dir"
-binary_path="$extract_dir/Puls_${version}_${target_os}_${target_arch}/puls"
-[ -f "$binary_path" ] || fail "в архиве не найден puls"
+package_dir=${asset%.tar.gz}
+binary_member=$package_dir/puls
+tar -xzf "$archive_path" -C "$extract_dir" "$binary_member" || \
+  fail "не удалось извлечь puls из пакета"
+binary_path=$extract_dir/$binary_member
+if [ ! -f "$binary_path" ] || [ -L "$binary_path" ]; then
+  fail "в архиве не найден обычный файл puls"
+fi
 
 mkdir -p "$install_dir"
 target_binary=$install_dir/puls

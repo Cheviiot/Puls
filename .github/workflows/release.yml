@@ -92,21 +92,57 @@ jobs:
         with:
           subject-checksums: dist/SHA256SUMS.txt
 
-      - name: Создание черновика GitHub Release
+      - name: Создание и загрузка черновика GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          release_created=0
+          cleanup_failed_release() {
+            status=$?
+            if [[ "$status" -ne 0 && "$release_created" -eq 1 ]]; then
+              gh release delete "$GITHUB_REF_NAME" --yes || true
+            fi
+            exit "$status"
+          }
+          trap cleanup_failed_release EXIT
+
           release_options=()
           if [[ "$GITHUB_REF_NAME" == *-* ]]; then
             release_options+=(--prerelease)
           fi
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "$GITHUB_REF_NAME" \
             --draft \
             --verify-tag \
             --generate-notes \
             --title "Puls $GITHUB_REF_NAME" \
             "${release_options[@]}"
+          release_created=1
+
+          for asset_path in dist/*; do
+            if [[ "${asset_path##*/}" != "install.ps1" ]]; then
+              gh release upload "$GITHUB_REF_NAME" "$asset_path"
+            fi
+          done
+
+          release_id=$(gh release view "$GITHUB_REF_NAME" --json databaseId --jq .databaseId)
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Content-Type: text/plain; charset=utf-8" \
+            --data-binary @dist/install.ps1 \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=install.ps1" \
+            > /dev/null
+
+          content_type=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
+            --jq 'map(select(.name == "install.ps1")) | if length == 1 then .[0].content_type else "" end')
+          if [[ "$content_type" != "text/plain; charset=utf-8" ]]; then
+            echo "install.ps1 опубликован с неверным Content-Type: $content_type" >&2
+            exit 1
+          fi
+          trap - EXIT
 
       - name: Публикация GitHub Release
         env:

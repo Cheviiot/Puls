@@ -43,17 +43,23 @@ Windows PowerShell:
 irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 ```
 
-`install.sh` помещает binary в `${XDG_BIN_HOME:-$HOME/.local/bin}`, определяет
-текущую оболочку и идемпотентно настраивает `PATH` через `.bashrc`,
+`install.sh` помещает binary в `$HOME/.local/bin`, определяет текущую оболочку и
+идемпотентно настраивает `PATH` через `.bashrc`,
 `.bash_profile`, `.zshrc`, `.profile` или отдельный файл Fish. Ручное
 редактирование окружения и root не нужны. `install.ps1` использует
 `%LOCALAPPDATA%\Programs\Puls\bin` и добавляет его в пользовательский `PATH`.
+Нестандартный каталог выбирается только явным параметром пользователя.
+Для автоматизации оба установщика также принимают явный override через
+`PULS_INSTALL_DIR`.
 Оба установщика:
 
 - определяют `amd64` или `arm64`;
 - получают только release assets из `Cheviiot/Puls`;
+- выбирают ровно один архив для текущих OS и architecture из
+  `RELEASE_MANIFEST.json` и проверяют ожидаемое имя пакета;
 - скачивают `SHA256SUMS.txt` для того же immutable tag;
-- проверяют точный SHA-256 до распаковки;
+- сверяют SHA-256 пакета между manifest и `SHA256SUMS.txt`, затем проверяют
+  фактически скачанные manifest и архив до распаковки;
 - устанавливают binary через временный файл;
 - при повторном запуске атомарно обновляют binary до `releases/latest`;
 - не отправляют telemetry и не требуют GitHub token.
@@ -106,6 +112,12 @@ Installer:     install.sh / install.ps1
 - `install.sh` и `install.ps1` как отдельные release assets;
 - `RELEASE_MANIFEST.json` с точными архивами, OS, architecture и SHA-256;
 - `SHA256SUMS.txt` для архивов, manifest и обоих установщиков.
+
+Исходник `install.ps1` содержит только ASCII, а русский каталог сообщений
+декодируется из UTF-8 во время выполнения. Asset загружается в GitHub Release с
+`Content-Type: text/plain; charset=utf-8`. Это обеспечивает одинаковую работу
+`irm | iex` и прямого запуска файла в Windows PowerShell 5 независимо от
+системной кодовой страницы.
 
 Каждый архив содержит binary, лицензию, changelog и полный комплект публичной
 Markdown-документации. Сборка выполняется с `CGO_ENABLED=0`, `-trimpath` и
