@@ -78,7 +78,8 @@ func printHelp(w io.Writer, style *ui.Style) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, style.Bold("ВЫВОД И ДИАГНОСТИКА"))
 	printHelpRow(w, "--json", "структурированный JSON в стандартный вывод")
-	printHelpRow(w, "--show-ip", "показать внешний IP · доступно для yandex")
+	printHelpRow(w, "--show-ip", "показать внешний IP вместе с замером · yandex")
+	printHelpRow(w, "--ip", "только внешний IP, без замера · yandex")
 	printHelpRow(w, "--verbose", "выбор сервера, резервный путь и переподключения")
 	printHelpRow(w, "--no-color", "отключить цвета")
 	printHelpRow(w, "--version", "показать версию")
@@ -91,6 +92,7 @@ func printHelp(w io.Writer, style *ui.Style) {
 	printHelpExample(w, "puls all --profile quick", "быстро проверить все источники")
 	printHelpExample(w, "puls speedtest --only download", "измерить только входящую скорость")
 	printHelpExample(w, "puls all --json", "получить структурированный результат")
+	printHelpExample(w, "puls --ip", "проверить только внешний IP")
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, style.Dim("Ctrl+C останавливает замер · подробнее: README.md"))
@@ -137,6 +139,7 @@ func run(args []string) int {
 		noColor     = fs.Bool("no-color", false, "")
 		server      = fs.String("server", "", "")
 		showIP      = fs.Bool("show-ip", false, "")
+		ipOnly      = fs.Bool("ip", false, "")
 		showVersion = fs.Bool("version", false, "")
 	)
 	// The standard flag package prints the full usage for every parse error.
@@ -156,6 +159,12 @@ func run(args []string) int {
 	if *showVersion {
 		fmt.Printf("Puls %s\n", version)
 		return 0
+	}
+	if *ipOnly {
+		if providerKey != "" && providerKey != "yandex" {
+			return printUsageError(errStyle, "--ip доступен только для источника yandex")
+		}
+		return runIPOnly(*jsonOut, *noColor, *verbose)
 	}
 	durationFlagSet := false
 	fs.Visit(func(f *flag.Flag) {
@@ -271,6 +280,79 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, style.Dim("прервано пользователем"))
 	}
 	return code
+}
+
+type ipOnlyResult struct {
+	ExternalIP *string `json:"external_ip"`
+	Error      string  `json:"error,omitempty"`
+}
+
+// runIPOnly implements --ip: a single-purpose lookup that skips server
+// selection and every measurement phase, unlike --show-ip which only adds
+// the address to an otherwise normal run.
+func runIPOnly(jsonOut, noColor, verbose bool) int {
+	printHuman := !jsonOut
+	live := printHuman && ui.IsTerminal(os.Stdout)
+	style := ui.NewStyle(printHuman && ui.ColorEnabled(os.Stdout, noColor))
+	var output io.Writer = io.Discard
+	if printHuman {
+		output = os.Stdout
+	}
+	var verbosef func(string, ...any)
+	if verbose {
+		verbosef = func(format string, values ...any) {
+			fmt.Fprint(os.Stderr, style.Dim("подробно"), "  ")
+			fmt.Fprintf(os.Stderr, format+"\n", values...)
+		}
+	}
+	return runIPOnlyWithDetector(yandex.New(), output, os.Stdout, style, live, jsonOut, verbosef)
+}
+
+func runIPOnlyWithDetector(detector externalIPProvider, output, jsonWriter io.Writer, style *ui.Style, live, jsonOut bool, verbosef func(string, ...any)) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	line := ui.NewLine(output, live)
+	ip, err := ui.Spin(line, "определение внешнего IP…", func() (string, error) {
+		attemptCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return detector.DetectExternalIP(attemptCtx)
+	})
+
+	result := ipOnlyResult{}
+	if err != nil {
+		if verbosef != nil {
+			verbosef("внешний IP: %v", err)
+		}
+		result.Error = humanError(err)
+	} else {
+		result.ExternalIP = &ip
+	}
+
+	switch {
+	case err == nil:
+		line.Final(metricLabel(style, "Внешний IP") + ip)
+	case errors.Is(err, context.Canceled):
+		line.Final(metricLabel(style, "Внешний IP") + style.Dim("остановлено"))
+	default:
+		line.Final(metricLabel(style, "Внешний IP") + phaseFailure(style, err))
+	}
+	if jsonOut {
+		if encodeErr := json.NewEncoder(jsonWriter).Encode(result); encodeErr != nil {
+			fmt.Fprintln(os.Stderr, "ошибка записи JSON:", encodeErr)
+			return 1
+		}
+	}
+
+	switch {
+	case err == nil:
+		return 0
+	case errors.Is(err, context.Canceled):
+		fmt.Fprintln(os.Stderr, style.Dim("прервано пользователем"))
+		return 130
+	default:
+		return 1
+	}
 }
 
 func writeJSON(output io.Writer, results []runResult) error {
