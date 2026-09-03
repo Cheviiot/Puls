@@ -225,7 +225,7 @@ func (f fakeProvider) Upload(context.Context, provider.MeasurementConfig, func(p
 func TestRunProviderPartialResultAndHumanOutput(t *testing.T) {
 	var output bytes.Buffer
 	result := runProvider(context.Background(), fakeProvider{pingErr: errors.New("ping failed")}, &output, ui.NewStyle(false), false,
-		provider.MeasurementConfig{Duration: 10 * time.Second, MaxConnections: 16}, true, true, true)
+		provider.MeasurementConfig{Duration: 10 * time.Second, MaxConnections: 16}, true, true, true, false)
 	if result.Status != "partial" || result.PingMs != nil || result.Download == nil || result.Upload == nil {
 		t.Fatalf("result = %+v, want partial with null ping and successful throughput", result)
 	}
@@ -233,6 +233,58 @@ func TestRunProviderPartialResultAndHumanOutput(t *testing.T) {
 		if !strings.Contains(output.String(), text) {
 			t.Errorf("human output does not contain %q:\n%s", text, output.String())
 		}
+	}
+}
+
+type fakeIPProvider struct {
+	fakeProvider
+	ip    string
+	ipErr error
+}
+
+func (f fakeIPProvider) DetectExternalIP(context.Context) (string, error) {
+	if f.ipErr != nil {
+		return "", f.ipErr
+	}
+	return f.ip, nil
+}
+
+func TestRunProviderShowIPDetectsAddress(t *testing.T) {
+	var output bytes.Buffer
+	result := runProvider(context.Background(), fakeIPProvider{ip: "203.0.113.7"}, &output, ui.NewStyle(false), false,
+		provider.MeasurementConfig{Duration: 10 * time.Second, MaxConnections: 16}, true, true, true, true)
+	if result.ExternalIP == nil || *result.ExternalIP != "203.0.113.7" {
+		t.Fatalf("result.ExternalIP = %v, want \"203.0.113.7\"", result.ExternalIP)
+	}
+	if !strings.Contains(output.String(), "203.0.113.7") {
+		t.Errorf("human output does not contain detected IP:\n%s", output.String())
+	}
+}
+
+func TestRunProviderShowIPHandlesDetectionFailure(t *testing.T) {
+	var output bytes.Buffer
+	result := runProvider(context.Background(), fakeIPProvider{ipErr: errors.New("boom")}, &output, ui.NewStyle(false), false,
+		provider.MeasurementConfig{Duration: 10 * time.Second, MaxConnections: 16}, true, true, true, true)
+	if result.ExternalIP != nil {
+		t.Fatalf("result.ExternalIP = %v, want nil after detection failure", result.ExternalIP)
+	}
+	if result.Status != "ok" {
+		t.Errorf("result.Status = %q, want \"ok\" — IP detection failure must not affect measurement status", result.Status)
+	}
+	if !strings.Contains(output.String(), "недоступно") {
+		t.Errorf("human output does not report unavailable IP:\n%s", output.String())
+	}
+}
+
+func TestRunProviderShowIPUnsupportedByProvider(t *testing.T) {
+	var output bytes.Buffer
+	result := runProvider(context.Background(), fakeProvider{}, &output, ui.NewStyle(false), false,
+		provider.MeasurementConfig{Duration: 10 * time.Second, MaxConnections: 16}, true, true, true, true)
+	if result.ExternalIP != nil {
+		t.Fatalf("result.ExternalIP = %v, want nil for a provider without IP detection", result.ExternalIP)
+	}
+	if !strings.Contains(output.String(), "не поддерживается") {
+		t.Errorf("human output does not report unsupported IP detection:\n%s", output.String())
 	}
 }
 
@@ -244,7 +296,7 @@ func TestJSONKeepsMissingMeasurementsAsNull(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, field := range []string{`"ping_ms":null`, `"jitter_ms":null`, `"download_mbps":null`, `"upload_mbps":null`} {
+	for _, field := range []string{`"ping_ms":null`, `"jitter_ms":null`, `"download_mbps":null`, `"upload_mbps":null`, `"external_ip":null`} {
 		if !strings.Contains(text, field) {
 			t.Errorf("JSON missing %s: %s", field, text)
 		}

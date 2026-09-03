@@ -78,6 +78,7 @@ func printHelp(w io.Writer, style *ui.Style) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, style.Bold("ВЫВОД И ДИАГНОСТИКА"))
 	printHelpRow(w, "--json", "структурированный JSON в стандартный вывод")
+	printHelpRow(w, "--show-ip", "показать внешний IP · доступно для yandex")
 	printHelpRow(w, "--verbose", "выбор сервера, резервный путь и переподключения")
 	printHelpRow(w, "--no-color", "отключить цвета")
 	printHelpRow(w, "--version", "показать версию")
@@ -135,6 +136,7 @@ func run(args []string) int {
 		verbose     = fs.Bool("verbose", false, "")
 		noColor     = fs.Bool("no-color", false, "")
 		server      = fs.String("server", "", "")
+		showIP      = fs.Bool("show-ip", false, "")
 		showVersion = fs.Bool("version", false, "")
 	)
 	// The standard flag package prints the full usage for every parse error.
@@ -249,7 +251,7 @@ func run(args []string) int {
 		if configurable, ok := backend.(interface{ SetVerbose(func(string, ...any)) }); ok {
 			configurable.SetVerbose(verbosef)
 		}
-		results = append(results, runProvider(ctx, backend, output, style, live, cfg, doPing, doDownload, doUpload))
+		results = append(results, runProvider(ctx, backend, output, style, live, cfg, doPing, doDownload, doUpload, *showIP))
 		if ctx.Err() != nil {
 			break
 		}
@@ -340,17 +342,18 @@ type phasesResult struct {
 }
 
 type runResult struct {
-	Provider  string       `json:"provider"`
-	Server    string       `json:"server,omitempty"`
-	Status    string       `json:"status"`
-	PingMs    *float64     `json:"ping_ms"`
-	JitterMs  *float64     `json:"jitter_ms"`
-	Download  *float64     `json:"download_mbps"`
-	Upload    *float64     `json:"upload_mbps"`
-	Phases    phasesResult `json:"phases"`
-	ErrorCode string       `json:"error_code,omitempty"`
-	Err       string       `json:"error,omitempty"`
-	Warnings  []string     `json:"warnings,omitempty"`
+	Provider   string       `json:"provider"`
+	Server     string       `json:"server,omitempty"`
+	Status     string       `json:"status"`
+	PingMs     *float64     `json:"ping_ms"`
+	JitterMs   *float64     `json:"jitter_ms"`
+	Download   *float64     `json:"download_mbps"`
+	Upload     *float64     `json:"upload_mbps"`
+	ExternalIP *string      `json:"external_ip"`
+	Phases     phasesResult `json:"phases"`
+	ErrorCode  string       `json:"error_code,omitempty"`
+	Err        string       `json:"error,omitempty"`
+	Warnings   []string     `json:"warnings,omitempty"`
 }
 
 func newRunResult(name string, ping, download, upload bool) runResult {
@@ -544,7 +547,15 @@ func printSummary(output io.Writer, style *ui.Style, results []runResult) {
 	fmt.Fprintf(output, "%s  %s\n", style.Bold("Итог"), strings.Join(parts, style.Dim(" · ")))
 }
 
-func runProvider(ctx context.Context, backend provider.Provider, output io.Writer, style *ui.Style, live bool, cfg provider.MeasurementConfig, doPing, doDownload, doUpload bool) runResult {
+// externalIPProvider is implemented by providers that can report the
+// visitor's public IP address as detected by their own first-party
+// endpoints. Detection is best-effort metadata, not a measurement phase: a
+// failure never affects result.Status or exit code.
+type externalIPProvider interface {
+	DetectExternalIP(context.Context) (string, error)
+}
+
+func runProvider(ctx context.Context, backend provider.Provider, output io.Writer, style *ui.Style, live bool, cfg provider.MeasurementConfig, doPing, doDownload, doUpload, showIP bool) runResult {
 	result := newRunResult(backend.Name(), doPing, doDownload, doUpload)
 	fmt.Fprintf(output, "%s %s\n", style.Cyan("●"), style.Bold(displayProviderName(backend.Name())))
 
@@ -580,6 +591,28 @@ func runProvider(ctx context.Context, backend provider.Provider, output io.Write
 		cfg.Verbose("источник=%s сервер=%s", displayProviderName(backend.Name()), server.Name)
 	}
 	selectLine.Final(metricLabel(style, "Сервер") + formatServer(server))
+
+	if showIP {
+		ipLine := ui.NewLine(output, live)
+		if detector, ok := backend.(externalIPProvider); ok {
+			ip, ipErr := ui.Spin(ipLine, "определение внешнего IP…", func() (string, error) {
+				attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cancel()
+				return detector.DetectExternalIP(attemptCtx)
+			})
+			if ipErr != nil {
+				if cfg.Verbose != nil {
+					cfg.Verbose("внешний IP: %v", ipErr)
+				}
+				ipLine.Final(metricLabel(style, "Внешний IP") + style.Dim("недоступно"))
+			} else {
+				result.ExternalIP = &ip
+				ipLine.Final(metricLabel(style, "Внешний IP") + ip)
+			}
+		} else {
+			ipLine.Final(metricLabel(style, "Внешний IP") + style.Dim("не поддерживается"))
+		}
+	}
 
 	if doPing {
 		pingLine := ui.NewLine(output, live)

@@ -87,6 +87,7 @@ puls all --json
 | `--only all\|ping\|download\|upload` | Какие измерения выполнить |
 | `--server <host>` | Сервер только для `speedtest` |
 | `--json` | Машинный результат без оформления |
+| `--show-ip` | Внешний IP · доступно только для `yandex` |
 | `--verbose` | Выбор endpoint и fallback в `stderr` |
 | `--no-color` | Вывод без цвета |
 | `--version` | Версия Puls |
@@ -129,7 +130,8 @@ Warm-up не входит в результат, worker может перепо�
   "ping_ms": 19.0,
   "jitter_ms": 1.4,
   "download_mbps": 89.68,
-  "upload_mbps": 93.29
+  "upload_mbps": 93.29,
+  "external_ip": null
 }
 ```
 

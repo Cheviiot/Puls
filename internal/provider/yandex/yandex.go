@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -27,16 +28,19 @@ import (
 )
 
 const (
-	defaultProbesURL     = "https://yandex.ru/internet/api/v0/get-probes?flag_ws-conn-timeout=2000"
-	userAgent            = "Mozilla/5.0 (compatible; Puls; +https://github.com/Cheviiot/Puls)"
-	uploadChunkSize      = 2 * 1024 * 1024
-	websocketChunkSize   = 64 << 10
-	expectedDownloadSize = 50 << 20
-	maxDiscoveryBodySize = 2 << 20
-	maxPingBodySize      = 64 << 10
-	maxDownloadBodySize  = 1 << 30
-	maxUploadResponse    = 1 << 20
-	maxWebsocketAckSize  = 4 << 10
+	defaultProbesURL       = "https://yandex.ru/internet/api/v0/get-probes?flag_ws-conn-timeout=2000"
+	defaultInternetPageURL = "https://yandex.ru/internet/"
+	userAgent              = "Mozilla/5.0 (compatible; Puls; +https://github.com/Cheviiot/Puls)"
+	uploadChunkSize        = 2 * 1024 * 1024
+	websocketChunkSize     = 64 << 10
+	expectedDownloadSize   = 50 << 20
+	maxDiscoveryBodySize   = 2 << 20
+	maxPingBodySize        = 64 << 10
+	maxDownloadBodySize    = 1 << 30
+	maxUploadResponse      = 1 << 20
+	maxWebsocketAckSize    = 4 << 10
+	maxInternetPageSize    = 8 << 20
+	clientStateMarker      = "Client.default("
 )
 
 var websocketUploadChunk = make([]byte, websocketChunkSize)
@@ -78,9 +82,10 @@ type uploadProbe struct {
 
 // Provider implements provider.Provider for Яндекс.Интернетометр.
 type Provider struct {
-	client    *http.Client
-	dialer    *websocket.Dialer
-	probesURL string
+	client          *http.Client
+	dialer          *websocket.Dialer
+	probesURL       string
+	internetPageURL string
 
 	mu           sync.RWMutex
 	latencyURLs  []string
@@ -115,7 +120,8 @@ func New() *Provider {
 			Proxy:             http.ProxyFromEnvironment,
 			EnableCompression: false,
 		},
-		probesURL: defaultProbesURL,
+		probesURL:       defaultProbesURL,
+		internetPageURL: defaultInternetPageURL,
 	}
 }
 
@@ -307,6 +313,108 @@ func hostOf(rawURL string) string {
 		return ""
 	}
 	return u.Host
+}
+
+// DetectExternalIP reports the visitor's public IP address exactly as the
+// official Яндекс.Интернетометр page (https://yandex.ru/internet/) detects
+// and embeds it in its own bootstrap state for display. It performs a
+// single GET of that page and does not touch get-probes or any measurement
+// state, so it can be called independently of SelectServer.
+func (p *Provider) DetectExternalIP(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.internetPageURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("запрос страницы интернетометра: %w", err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "text/html")
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("запрос страницы интернетометра: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("страница интернетометра вернула состояние %s", resp.Status)
+	}
+
+	limited := &io.LimitedReader{R: resp.Body, N: maxInternetPageSize + 1}
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		return "", fmt.Errorf("чтение страницы интернетометра: %w", err)
+	}
+	if limited.N <= 0 {
+		return "", errors.New("страница интернетометра превышает безопасный предел")
+	}
+
+	object, err := extractBalancedJSONObject(body, clientStateMarker)
+	if err != nil {
+		return "", fmt.Errorf("поиск состояния клиента на странице интернетометра: %w", err)
+	}
+	var state struct {
+		IP struct {
+			V4 string `json:"v4"`
+			V6 string `json:"v6"`
+		} `json:"ip"`
+	}
+	if err := json.Unmarshal(object, &state); err != nil {
+		return "", fmt.Errorf("разбор состояния клиента интернетометра: %w", err)
+	}
+	for _, candidate := range []string{state.IP.V4, state.IP.V6} {
+		if ip := net.ParseIP(candidate); ip != nil {
+			return ip.String(), nil
+		}
+	}
+	return "", errors.New("страница интернетометра не сообщила действительный IP-адрес")
+}
+
+// extractBalancedJSONObject returns the first "{...}" object literal that
+// follows marker in body, matching braces while respecting quoted strings
+// so nested objects and escaped quotes don't break the scan.
+func extractBalancedJSONObject(body []byte, marker string) ([]byte, error) {
+	idx := bytes.Index(body, []byte(marker))
+	if idx < 0 {
+		return nil, fmt.Errorf("маркер %q не найден", marker)
+	}
+	start := idx + len(marker)
+	for start < len(body) && isJSONSpace(body[start]) {
+		start++
+	}
+	if start >= len(body) || body[start] != '{' {
+		return nil, errors.New("после маркера нет JSON-объекта")
+	}
+
+	depth := 0
+	inString, escaped := false, false
+	for i := start; i < len(body); i++ {
+		c := body[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return body[start : i+1], nil
+			}
+		}
+	}
+	return nil, errors.New("не удалось найти конец JSON-объекта")
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 func (p *Provider) Ping(ctx context.Context) (provider.PingResult, error) {

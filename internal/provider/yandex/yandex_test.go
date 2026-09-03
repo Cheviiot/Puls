@@ -731,3 +731,96 @@ func cloneMap(source map[string]any) map[string]any {
 	}
 	return result
 }
+
+func internetPageHTML(body string) string {
+	return "<html><head></head><body><script>" + body + "</script></body></html>"
+}
+
+func TestDetectExternalIPParsesV4(t *testing.T) {
+	html := internetPageHTML(`Client.default({"blackbox":{"isValid":false},"ip":{"v4":"203.0.113.7","v6":null},"other":{"nested":{"a":1}}})`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, html)
+	}))
+	defer server.Close()
+
+	p := New()
+	p.internetPageURL = server.URL
+	ip, err := p.DetectExternalIP(context.Background())
+	if err != nil {
+		t.Fatalf("DetectExternalIP() error = %v", err)
+	}
+	if ip != "203.0.113.7" {
+		t.Fatalf("DetectExternalIP() = %q, want %q", ip, "203.0.113.7")
+	}
+}
+
+func TestDetectExternalIPFallsBackToV6(t *testing.T) {
+	html := internetPageHTML(`Client.default({"ip":{"v4":"","v6":"2001:db8::1"}})`)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, html)
+	}))
+	defer server.Close()
+
+	p := New()
+	p.internetPageURL = server.URL
+	ip, err := p.DetectExternalIP(context.Background())
+	if err != nil {
+		t.Fatalf("DetectExternalIP() error = %v", err)
+	}
+	if ip != "2001:db8::1" {
+		t.Fatalf("DetectExternalIP() = %q, want %q", ip, "2001:db8::1")
+	}
+}
+
+func TestDetectExternalIPRejectsInvalidResponses(t *testing.T) {
+	tests := map[string]struct {
+		status int
+		body   string
+	}{
+		"no marker":        {http.StatusOK, internetPageHTML(`SomethingElse({"ip":{"v4":"203.0.113.7"}})`)},
+		"malformed json":   {http.StatusOK, internetPageHTML(`Client.default({"ip":{"v4":"203.0.113.7"`)},
+		"missing ip":       {http.StatusOK, internetPageHTML(`Client.default({"blackbox":{"isValid":false}})`)},
+		"invalid ip value": {http.StatusOK, internetPageHTML(`Client.default({"ip":{"v4":"not-an-ip","v6":""}})`)},
+		"server error":     {http.StatusInternalServerError, internetPageHTML(`Client.default({"ip":{"v4":"203.0.113.7"}})`)},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				fmt.Fprint(w, tt.body)
+			}))
+			defer server.Close()
+
+			p := New()
+			p.internetPageURL = server.URL
+			if _, err := p.DetectExternalIP(context.Background()); err == nil {
+				t.Fatal("DetectExternalIP() error = nil, want error")
+			}
+		})
+	}
+}
+
+func TestDetectExternalIPRejectsOversizedPage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(make([]byte, maxInternetPageSize+1))
+	}))
+	defer server.Close()
+
+	p := New()
+	p.internetPageURL = server.URL
+	if _, err := p.DetectExternalIP(context.Background()); err == nil {
+		t.Fatal("DetectExternalIP() error = nil, want error for oversized page")
+	}
+}
+
+func TestExtractBalancedJSONObjectHandlesEscapedQuotesAndNesting(t *testing.T) {
+	body := []byte(`prefix Client.default({"a":"va\"lue","b":{"c":1}}) suffix`)
+	object, err := extractBalancedJSONObject(body, clientStateMarker)
+	if err != nil {
+		t.Fatalf("extractBalancedJSONObject() error = %v", err)
+	}
+	want := `{"a":"va\"lue","b":{"c":1}}`
+	if string(object) != want {
+		t.Fatalf("extractBalancedJSONObject() = %q, want %q", object, want)
+	}
+}
