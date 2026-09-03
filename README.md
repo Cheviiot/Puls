@@ -74,6 +74,7 @@ puls
 puls yandex --profile quick
 puls speedtest --only ping
 puls all --json
+puls --ip
 ```
 
 Источники: `yandex`, `speedtest` и `all`. По умолчанию Puls последовательно
@@ -87,7 +88,8 @@ puls all --json
 | `--only all\|ping\|download\|upload` | Какие измерения выполнить |
 | `--server <host>` | Сервер только для `speedtest` |
 | `--json` | Машинный результат без оформления |
-| `--show-ip` | Внешний IP · доступно только для `yandex` |
+| `--show-ip` | Внешний IP вместе с обычным замером · только `yandex` |
+| `--ip` | Только внешний IP, без замера · только `yandex` |
 | `--verbose` | Выбор endpoint и fallback в `stderr` |
 | `--no-color` | Вывод без цвета |
 | `--version` | Версия Puls |
@@ -133,6 +135,12 @@ Warm-up не входит в результат, worker может перепо�
   "upload_mbps": 93.29,
   "external_ip": null
 }
+```
+
+`--ip` — отдельный режим без замера, поэтому у него свой, более короткий JSON:
+
+```json
+{"external_ip": "77.34.3.166"}
 ```
 
 | Code | Значение |

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,8 @@ func TestRunRejectsInvalidFlags(t *testing.T) {
 		{"--only=unknown"},
 		{"unknown"},
 		{"yandex", "--server=example.com"},
+		{"speedtest", "--ip"},
+		{"all", "--ip"},
 	}
 	for _, args := range cases {
 		if code := run(args); code != 2 {
@@ -285,6 +288,80 @@ func TestRunProviderShowIPUnsupportedByProvider(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "не поддерживается") {
 		t.Errorf("human output does not report unsupported IP detection:\n%s", output.String())
+	}
+}
+
+type fakeDetector struct {
+	ip  string
+	err error
+}
+
+func (f fakeDetector) DetectExternalIP(context.Context) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.ip, nil
+}
+
+func TestRunIPOnlyDetectsAddress(t *testing.T) {
+	var jsonOutput bytes.Buffer
+	code := runIPOnlyWithDetector(fakeDetector{ip: "203.0.113.7"}, io.Discard, &jsonOutput, ui.NewStyle(false), false, true, nil)
+	if code != 0 {
+		t.Fatalf("runIPOnlyWithDetector() = %d, want 0", code)
+	}
+	var result ipOnlyResult
+	if err := json.Unmarshal(jsonOutput.Bytes(), &result); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", jsonOutput.String(), err)
+	}
+	if result.ExternalIP == nil || *result.ExternalIP != "203.0.113.7" {
+		t.Fatalf("result.ExternalIP = %v, want \"203.0.113.7\"", result.ExternalIP)
+	}
+}
+
+func TestRunIPOnlyHandlesDetectionFailure(t *testing.T) {
+	var jsonOutput bytes.Buffer
+	code := runIPOnlyWithDetector(fakeDetector{err: errors.New("boom")}, io.Discard, &jsonOutput, ui.NewStyle(false), false, true, nil)
+	if code != 1 {
+		t.Fatalf("runIPOnlyWithDetector() = %d, want 1", code)
+	}
+	var result ipOnlyResult
+	if err := json.Unmarshal(jsonOutput.Bytes(), &result); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error = %v", jsonOutput.String(), err)
+	}
+	if result.ExternalIP != nil {
+		t.Fatalf("result.ExternalIP = %v, want nil after detection failure", result.ExternalIP)
+	}
+	if result.Error == "" {
+		t.Fatal("result.Error is empty, want a message after detection failure")
+	}
+}
+
+func TestRunIPOnlyHumanOutputReportsFailure(t *testing.T) {
+	var output bytes.Buffer
+	code := runIPOnlyWithDetector(fakeDetector{err: errors.New("boom")}, &output, io.Discard, ui.NewStyle(false), false, false, nil)
+	if code != 1 {
+		t.Fatalf("runIPOnlyWithDetector() = %d, want 1", code)
+	}
+	if !strings.Contains(output.String(), "не удалось") {
+		t.Errorf("human output does not report failure:\n%s", output.String())
+	}
+}
+
+func TestRunIPOnlyHumanOutputShowsAddress(t *testing.T) {
+	var output bytes.Buffer
+	code := runIPOnlyWithDetector(fakeDetector{ip: "203.0.113.7"}, &output, io.Discard, ui.NewStyle(false), false, false, nil)
+	if code != 0 {
+		t.Fatalf("runIPOnlyWithDetector() = %d, want 0", code)
+	}
+	if !strings.Contains(output.String(), "203.0.113.7") {
+		t.Errorf("human output does not contain detected IP:\n%s", output.String())
+	}
+}
+
+func TestRunIPOnlyHandlesCancellation(t *testing.T) {
+	code := runIPOnlyWithDetector(fakeDetector{err: context.Canceled}, io.Discard, io.Discard, ui.NewStyle(false), false, false, nil)
+	if code != 130 {
+		t.Fatalf("runIPOnlyWithDetector() = %d, want 130", code)
 	}
 }
 
