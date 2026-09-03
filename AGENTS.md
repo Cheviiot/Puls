@@ -48,6 +48,7 @@ puls [source] [options]
 --only all|ping|download|upload
 --server <host>
 --json
+--show-ip
 --verbose
 --no-color
 --version
@@ -55,7 +56,11 @@ puls [source] [options]
 ```
 
 `--connections=0` означает нативный автоматический режим. `--server` относится
-только к `speedtest`. Не добавляй aliases и скрытые legacy flags без явной
+только к `speedtest`. `--show-ip` включает показ внешнего IP и работает только
+для `yandex` (эта информация получена не через `get-probes`, а через
+отдельный запрос главной страницы интернетометра — см. правила Yandex ниже);
+для `speedtest` строка отображается как «не поддерживается», а JSON-поле
+остаётся `null`. Не добавляй aliases и скрытые legacy flags без явной
 продуктовой причины.
 
 ## Карта репозитория
@@ -132,6 +137,13 @@ puls [source] [options]
   `{"k":"u","b":...}`.
 - При недоступности WebSocket разрешён fallback на `postUrl`; учитывай POST
   только после успешного HTTP status.
+- Внешний IP для `--show-ip` берётся из HTML главной страницы
+  `https://yandex.ru/internet/`: сервис встраивает bootstrap-состояние вида
+  `Client.default({...,"ip":{"v4":"...","v6":...},...})`, из которого
+  извлекается только объект `ip`. Проверено вручную 2026-09-03. Ограничивай
+  тело страницы по размеру, разбирай JSON только внутри найденных парных
+  фигурных скобок и не доверяй остальным полям bootstrap-состояния
+  (`blackbox`, `isp` и т.д.) — они не нужны и не должны попадать в вывод.
 
 ### speedtest.ru
 
@@ -163,9 +175,12 @@ bytes, elapsed, successful/failed streams и warnings.
 - исходный `cause` через Go error wrapping.
 
 JSON сохраняет верхнеуровневые поля `provider`, `server`, `status`, `ping_ms`,
-`jitter_ms`, `download_mbps`, `upload_mbps`, `phases`, `error_code`, `error` и
-`warnings`. Отсутствующие измерения выводятся как `null`, а не удаляются через
-`omitempty`.
+`jitter_ms`, `download_mbps`, `upload_mbps`, `external_ip`, `phases`,
+`error_code`, `error` и `warnings`. Отсутствующие измерения выводятся как
+`null`, а не удаляются через `omitempty`. `external_ip` — `null`, если
+`--show-ip` не указан, источник его не поддерживает или определение не
+удалось; это необязательные метаданные, а не фаза измерения, поэтому их
+отказ никогда не влияет на `status` или exit code.
 
 Exit codes:
 
