@@ -1,5 +1,5 @@
 // Package measure holds throughput-measurement helpers shared by every
-// download/upload-capable provider: converting a byte count to Mbit/s, and
+// download/upload-capable service: converting a byte count to Mbit/s, and
 // reporting a live rate that stays readable instead of jumping around.
 package measure
 

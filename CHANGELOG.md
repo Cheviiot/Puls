@@ -4,6 +4,43 @@
 
 ## [Unreleased]
 
+## [0.2.0-rc.1] - 2026-09-04
+
+### Добавлено
+
+- Команда `puls ip [speedtest|yandex]`: speedtest.ru возвращает внешний IP и
+  интернет-провайдера, при автоматическом выборе доступен fallback на Яндекс.
+- Единый JSON envelope schema 1 с верхнеуровневым `connection`, массивом
+  `results`, объектами фаз и типизированными ошибками.
+- Определение IP через first-party API speedtest.ru с одной ротацией browser
+  key после 401/403; ISP остаётся необязательным дополнением.
+- Адаптивный TTY progress и отдельные diagnostics в `stderr`.
+
+### Изменено
+
+- Пользовательский термин «источник» заменён на «сервис измерения», конкретный
+  CDN/QMS называется «сервером измерения», оператор — «интернет-провайдером».
+- Внутренний пакет `internal/provider` переименован в `internal/service`, а
+  контракт `Provider` — в `Backend`.
+- CLI разделён на parsing, configuration, orchestration, connection info,
+  results, JSON и rendering; реализации сервисов и release builder также
+  разбиты по зонам ответственности.
+- Общие HTTP limits, strict JSON, connection limits, progress conversion и
+  преобразование engine results централизованы.
+- Ошибки классифицируются по типам, sentinel errors, `context` и `net.Error`,
+  без анализа текста.
+
+### Удалено
+
+- Устаревшие flags `--ip` и `-ip`; им на смену пришла команда `puls ip`.
+- JSON v0.1 с верхнеуровневым полем `provider` и отдельными форматами single/all.
+
+### Совместимость
+
+- Миграция v0.1 → v0.2: `puls --ip` заменить на `puls ip`, JSON-поле
+  `provider` — на `results[].service`, данные подключения читать из
+  `connection`. Остальные публичные English flags сохранены.
+
 ## [0.1.5] - 2026-09-03
 
 ### Добавлено

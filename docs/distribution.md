@@ -83,11 +83,22 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 Для конкретной версии используются параметры `--version` и `-Version`:
 
 ```bash
-sh install.sh --version 0.1.0
+sh install.sh --version 0.2.0-rc.1
 ```
 
 ```powershell
-.\install.ps1 -Version 0.1.0
+.\install.ps1 -Version 0.2.0-rc.1
+```
+
+`releases/latest` указывает на последний стабильный выпуск и не выбирает
+prerelease. RC можно установить напрямую короткой командой:
+
+```bash
+curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh | sh -s -- --version 0.2.0-rc.1
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1))) -Version 0.2.0-rc.1
 ```
 
 Для проверки кода перед запуском установщик можно сначала скачать как обычный
@@ -98,9 +109,9 @@ sh install.sh --version 0.1.0
 Версии и имена согласованы:
 
 ```text
-Git tag:       v0.1.0
-Binary:        Puls 0.1.0
-Archive:       Puls_0.1.0_linux_amd64.tar.gz
+Git tag:       v0.2.0-rc.1
+Binary:        Puls 0.2.0-rc.1
+Archive:       Puls_0.2.0-rc.1_linux_amd64.tar.gz
 Installer:     install.sh / install.ps1
 ```
 
@@ -160,13 +171,13 @@ sha256sum -c SHA256SUMS.txt
 Проверка provenance через GitHub CLI:
 
 ```bash
-gh attestation verify Puls_0.1.0_linux_amd64.tar.gz --repo Cheviiot/Puls
+gh attestation verify Puls_0.2.0_linux_amd64.tar.gz --repo Cheviiot/Puls
 ```
 
 SHA-256 защищает от повреждения скачанного файла. Artifact attestation
 дополнительно связывает digest с release workflow репозитория Puls.
 
-## Чек-лист первого выпуска
+## Чек-лист выпуска
 
 - [ ] Публичный repository имеет путь `Cheviiot/Puls`.
 - [ ] Commit прошёл все обязательные проверки `main`.

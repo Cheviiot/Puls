@@ -1,6 +1,6 @@
 //go:build live
 
-package yandex
+package speedtestru
 
 import (
 	"context"
@@ -8,15 +8,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Cheviiot/Puls/internal/provider"
+	"github.com/Cheviiot/Puls/internal/service"
 )
 
-func TestLiveYandex(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+func TestLiveSpeedtestRU(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 	defer cancel()
-	p := New()
-	var server provider.Server
-	var err error
+	p := New(Options{Server: ""})
+	connection, err := p.DetectConnection(ctx)
+	if err != nil || !connection.ExternalIP.IsValid() || connection.ISP == "" {
+		t.Fatalf("connection=%+v err=%v", connection, err)
+	}
+	t.Logf("connection detected: ISP=%s via %s", connection.ISP, p.ID())
+	var server service.Server
 	for range 2 {
 		server, err = p.SelectServer(ctx)
 		if err == nil {
@@ -26,22 +30,22 @@ func TestLiveYandex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var ping provider.PingResult
+	var ping service.PingResult
 	for range 2 {
 		ping, err = p.Ping(ctx)
 		if err == nil {
 			break
 		}
 	}
-	if err != nil || ping.Samples == 0 || ping.ValueMs <= 0 {
+	if err != nil || ping.Samples != 10 || ping.ValueMs <= 0 {
 		t.Fatalf("server=%+v ping=%+v err=%v", server, ping, err)
 	}
-	t.Logf("server=%s ping=%.2fms", server.Name, ping.ValueMs)
+	t.Logf("server=%s ping=%.2fms jitter=%.2fms", server.Name, ping.ValueMs, ping.JitterMs)
 	if os.Getenv("PULS_LIVE_THROUGHPUT") != "1" {
 		t.Log("set PULS_LIVE_THROUGHPUT=1 to run download/upload")
 		return
 	}
-	cfg := provider.MeasurementConfig{Duration: 10 * time.Second, MaxConnections: 16}
+	cfg := service.MeasurementConfig{Duration: 10 * time.Second, MaxConnections: 16}
 	download, err := p.Download(ctx, cfg, nil)
 	if err != nil || download.Bytes == 0 {
 		t.Fatalf("download=%+v err=%v", download, err)
