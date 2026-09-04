@@ -1,17 +1,54 @@
-// Package provider defines the common interface implemented by every
-// speed test backend (Yandex Internetometer, speedtest.ru, ...).
-package provider
+// Package service defines the contracts shared by Internet measurement
+// services such as Yandex Internetometer and speedtest.ru.
+package service
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"sort"
 	"time"
 )
 
-// Capability flags what a Provider can actually measure.
+// ServiceID identifies a measurement service in commands, results, and errors.
+type ServiceID string
+
+const (
+	Yandex    ServiceID = "yandex"
+	Speedtest ServiceID = "speedtest"
+	All       ServiceID = "all"
+)
+
+// Phase identifies an operation performed by a measurement service.
+type Phase string
+
+const (
+	PhaseSelect     Phase = "select"
+	PhaseConnection Phase = "connection"
+	PhasePing       Phase = "ping"
+	PhaseDownload   Phase = "download"
+	PhaseUpload     Phase = "upload"
+)
+
+// Status is the stable state used by human and machine-readable results.
+type Status string
+
+const (
+	StatusPending  Status = "pending"
+	StatusSkipped  Status = "skipped"
+	StatusOK       Status = "ok"
+	StatusPartial  Status = "partial"
+	StatusError    Status = "error"
+	StatusCanceled Status = "canceled"
+)
+
+// LogFunc receives optional diagnostic messages. Callers decide where they
+// are rendered; service implementations never write directly to a terminal.
+type LogFunc func(format string, args ...any)
+
+// Capability flags what a Backend can actually measure.
 type Capability int
 
 const (
@@ -24,7 +61,7 @@ func (c Capability) Has(x Capability) bool { return c&x != 0 }
 
 // PingResult is the outcome of a latency measurement.
 type PingResult struct {
-	// ValueMs is the provider-native latency value shown to the user. Some
+	// ValueMs is the service-native latency value shown to the user. Some
 	// services report the minimum RTT, others the median.
 	ValueMs  float64
 	MinMs    float64
@@ -36,12 +73,11 @@ type PingResult struct {
 }
 
 // MeasurementConfig controls a throughput phase. Connections=0 asks the
-// provider to use its native defaults. MaxConnections is a hard safety cap.
+// service to use its native defaults. MaxConnections is a hard safety cap.
 type MeasurementConfig struct {
 	Duration       time.Duration
 	Connections    int
 	MaxConnections int
-	Verbose        func(format string, args ...any)
 }
 
 // ThroughputProgress is emitted periodically while a transfer is running.
@@ -53,7 +89,7 @@ type ThroughputProgress struct {
 }
 
 // ThroughputResult contains only bytes confirmed by a successful HTTP or
-// provider-protocol response.
+// service-protocol response.
 type ThroughputResult struct {
 	Mbps                  float64
 	Bytes                 int64
@@ -76,11 +112,11 @@ const (
 	CodeInternal    ErrorCode = "internal"
 )
 
-// OpError describes which provider phase failed and whether retrying the
+// OpError describes which service phase failed and whether retrying the
 // operation can plausibly help.
 type OpError struct {
-	Provider  string
-	Phase     string
+	Service   ServiceID
+	Phase     Phase
 	Code      ErrorCode
 	Retryable bool
 	Err       error
@@ -90,9 +126,9 @@ func (e *OpError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	prefix := providerDisplayName(e.Provider)
+	prefix := DisplayName(e.Service)
 	if e.Phase != "" {
-		prefix += ": " + phaseDisplayName(e.Phase)
+		prefix += ": " + PhaseDisplayName(e.Phase)
 	}
 	if e.Err == nil {
 		return prefix + ": " + string(e.Code)
@@ -100,25 +136,15 @@ func (e *OpError) Error() string {
 	return fmt.Sprintf("%s: %v", prefix, e.Err)
 }
 
-func providerDisplayName(name string) string {
-	if name == "yandex" {
+// DisplayName returns the user-facing name of a measurement service.
+func DisplayName(id ServiceID) string {
+	switch id {
+	case Yandex:
 		return "Яндекс"
-	}
-	return name
-}
-
-func phaseDisplayName(phase string) string {
-	switch phase {
-	case "select":
-		return "выбор сервера"
-	case "ping":
-		return "задержка"
-	case "download":
-		return "скачивание"
-	case "upload":
-		return "отдача"
+	case Speedtest:
+		return "speedtest.ru"
 	default:
-		return phase
+		return string(id)
 	}
 }
 
@@ -129,14 +155,28 @@ func (e *OpError) Unwrap() error {
 	return e.Err
 }
 
-func NewError(providerName, phase string, code ErrorCode, retryable bool, err error) error {
+func NewError(serviceID ServiceID, phase Phase, code ErrorCode, retryable bool, err error) error {
 	// Retrying an explicit user cancellation is never useful. Keep every
-	// other caller-supplied retry decision intact: the provider knows whether
+	// other caller-supplied retry decision intact: the service knows whether
 	// an authentication/protocol failure is transient better than this layer.
 	if code == CodeCanceled || errors.Is(err, context.Canceled) {
 		retryable = false
 	}
-	return &OpError{Provider: providerName, Phase: phase, Code: code, Retryable: retryable, Err: err}
+	return &OpError{Service: serviceID, Phase: phase, Code: code, Retryable: retryable, Err: err}
+}
+
+// ConnectionInfo describes the public network identity reported by a service.
+// ISP is optional; ExternalIP is required for a successful lookup.
+type ConnectionInfo struct {
+	ExternalIP netip.Addr
+	ISP        string
+	Warnings   []string
+}
+
+// ConnectionInfoBackend is implemented by services that can report the
+// caller's public IP address and, when available, Internet service provider.
+type ConnectionInfoBackend interface {
+	DetectConnection(context.Context) (ConnectionInfo, error)
 }
 
 // Server describes the measurement endpoint that was selected.
@@ -146,10 +186,10 @@ type Server struct {
 	Region string
 }
 
-// Provider is a speed test backend.
-type Provider interface {
-	// Name is a short human-readable identifier, e.g. "yandex", "speedtest.ru".
-	Name() string
+// Backend implements one measurement service.
+type Backend interface {
+	// ID is the stable command and result identifier.
+	ID() ServiceID
 
 	// Capabilities reports what this backend can measure.
 	Capabilities() Capability
@@ -226,7 +266,7 @@ func Stats(samplesMs []float64) PingResult {
 }
 
 // StatsWithMethod returns the same descriptive statistics as Stats while
-// selecting the provider-native primary latency value.
+// selecting the service-native primary latency value.
 func StatsWithMethod(samplesMs []float64, method string) PingResult {
 	r := Stats(samplesMs)
 	if r.Samples == 0 {

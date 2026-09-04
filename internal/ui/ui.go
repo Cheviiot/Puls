@@ -19,7 +19,30 @@ import (
 
 // IsTerminal reports whether f is an interactive terminal.
 func IsTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
 	return term.IsTerminal(int(f.Fd()))
+}
+
+// ProgressWidth returns a compact progress-bar width suited to the current
+// terminal. Narrow terminals show only percentage and speed.
+func ProgressWidth(f *os.File) int {
+	if !IsTerminal(f) {
+		return 0
+	}
+	width, _, err := term.GetSize(int(f.Fd()))
+	if err != nil {
+		return 12
+	}
+	switch {
+	case width >= 72:
+		return 18
+	case width >= 48:
+		return 10
+	default:
+		return 0
+	}
 }
 
 // ColorEnabled reports whether ANSI styling should be used for f: it must

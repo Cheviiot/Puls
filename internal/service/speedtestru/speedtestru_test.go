@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -15,11 +16,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/Cheviiot/Puls/internal/provider"
+	"github.com/Cheviiot/Puls/internal/service"
 )
 
 func TestSelectServerDefaultsPort(t *testing.T) {
-	p := New("vladivostok.qms.ru")
+	p := New(Options{Server: "vladivostok.qms.ru"})
 	server, err := p.SelectServer(context.Background())
 	if err != nil {
 		t.Fatalf("SelectServer() error = %v", err)
@@ -33,7 +34,7 @@ func TestSelectServerDefaultsPort(t *testing.T) {
 }
 
 func TestSelectServerKeepsExplicitPort(t *testing.T) {
-	p := New("vladivostok.qms.ru:12345")
+	p := New(Options{Server: "vladivostok.qms.ru:12345"})
 	server, err := p.SelectServer(context.Background())
 	if err != nil {
 		t.Fatalf("SelectServer() error = %v", err)
@@ -49,7 +50,7 @@ func TestSelectServerKeepsExplicitPort(t *testing.T) {
 // dial attempt fail immediately, so auto-select fails fast and
 // deterministically, without depending on network conditions.
 func TestSelectServerAutoSelectFailsFastWithCanceledContext(t *testing.T) {
-	p := New("")
+	p := New(Options{Server: ""})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -60,23 +61,23 @@ func TestSelectServerAutoSelectFailsFastWithCanceledContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	var opErr *provider.OpError
-	if !errors.As(err, &opErr) || opErr.Code != provider.CodeCanceled || opErr.Retryable {
+	var opErr *service.OpError
+	if !errors.As(err, &opErr) || opErr.Code != service.CodeCanceled || opErr.Retryable {
 		t.Errorf("error = %#v, want non-retryable canceled OpError", err)
 	}
 }
 
 func TestPingRequiresSelectServerFirst(t *testing.T) {
-	p := New("example.com")
+	p := New(Options{Server: "example.com"})
 	if _, err := p.Ping(context.Background()); err == nil {
 		t.Error("Ping before SelectServer = nil error, want one")
 	}
 }
 
 func TestDownloadUploadRequireSelectServer(t *testing.T) {
-	p := New("example.com")
+	p := New(Options{Server: "example.com"})
 	ctx := context.Background()
-	cfg := provider.MeasurementConfig{Duration: 3 * time.Second}
+	cfg := service.MeasurementConfig{Duration: 3 * time.Second}
 	if _, err := p.Download(ctx, cfg, nil); err == nil {
 		t.Error("Download() = nil error, want SelectServer error")
 	}
@@ -86,11 +87,11 @@ func TestDownloadUploadRequireSelectServer(t *testing.T) {
 }
 
 func TestCapabilities(t *testing.T) {
-	p := New("example.com")
+	p := New(Options{Server: "example.com"})
 	caps := p.Capabilities()
-	for _, capability := range []provider.Capability{provider.CapPing, provider.CapDownload, provider.CapUpload} {
+	for _, capability := range []service.Capability{service.CapPing, service.CapDownload, service.CapUpload} {
 		if !caps.Has(capability) {
-			t.Errorf("speedtest.ru provider should support %v", capability)
+			t.Errorf("speedtest.ru service should support %v", capability)
 		}
 	}
 }
@@ -152,7 +153,7 @@ func TestQMSPingDownloadUploadProtocol(t *testing.T) {
 	server := httptest.NewTLSServer(mux)
 	defer server.Close()
 
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = server.Client()
 	p.dialer.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
 	p.jwt = token
@@ -185,9 +186,9 @@ func TestQMSPingDownloadUploadProtocol(t *testing.T) {
 }
 
 func TestPingUsesTenCachedDiscoverySamples(t *testing.T) {
-	p := New("")
+	p := New(Options{Server: ""})
 	samples := []float64{10, 11, 9, 10, 12, 10, 11, 9, 10, 10}
-	cached := provider.StatsWithMethod(samples, "median")
+	cached := service.StatsWithMethod(samples, "median")
 	cached.JitterMs = qmsJitter(samples, cached.MedianMs)
 	p.selected = qmsServer{Host: "unreachable.invalid:20000", Ping: cached}
 	p.servers = []qmsServer{p.selected}
@@ -226,7 +227,7 @@ func TestPingFailsOverToNextResponsiveServer(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.dialer.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
 	failed := qmsServer{Host: "127.0.0.1:1"}
 	responsive := qmsServer{Host: strings.TrimPrefix(server.URL, "https://")}
@@ -247,6 +248,7 @@ func TestDownloadRefreshesJWTAfterUnauthorized(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/server/gentoken", func(w http.ResponseWriter, _ *http.Request) {
 		tokenCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": freshToken})
 	})
 	mux.HandleFunc("/download.php", func(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +260,7 @@ func TestDownloadRefreshesJWTAfterUnauthorized(t *testing.T) {
 	})
 	server := httptest.NewTLSServer(mux)
 	defer server.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = server.Client()
 	p.apiBase = server.URL
 	p.jwt = "stale-jwt-token-long-enough"
@@ -285,6 +287,7 @@ func TestEnsureJWTRotatesBrowserKey(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": token})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
@@ -295,7 +298,7 @@ func TestEnsureJWTRotatesBrowserKey(t *testing.T) {
 	})
 	server := httptest.NewServer(mux)
 	defer server.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = server.Client()
 	p.apiBase = server.URL
 	p.browserKey = "obsolete-browser-key-123"
@@ -314,10 +317,11 @@ func TestFetchNearestValidatesCandidates(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.Copy(w, bytes.NewBufferString(`{"algorithm":"nearest","data":[{"id":1,"name":"moscow.speedtest.ru","city":"Москва","src":"https://moscow.qms.ru","source":"provider","port":20000},{"id":2,"name":"bad","city":"Москва","src":"http://insecure.invalid","source":"provider","port":20000}]}`))
 	}))
 	defer server.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = server.Client()
 	p.apiBase = server.URL
 	servers, _, err := p.fetchNearest(context.Background(), "key")
@@ -359,15 +363,15 @@ func TestNormalizeHost(t *testing.T) {
 }
 
 func TestFallbackServerIsPingOnly(t *testing.T) {
-	p := New("")
+	p := New(Options{Server: ""})
 	p.selected = qmsServer{Host: "fallback.qms.ru:20000"}
 	p.servers = []qmsServer{p.selected}
 	p.throughput = false
 	p.discoveryErr = errors.New("discovery unavailable")
 
-	_, err := p.Download(context.Background(), provider.MeasurementConfig{Duration: 3 * time.Second}, nil)
-	var opErr *provider.OpError
-	if !errors.As(err, &opErr) || opErr.Code != provider.CodeAuth || !opErr.Retryable {
+	_, err := p.Download(context.Background(), service.MeasurementConfig{Duration: 3 * time.Second}, nil)
+	var opErr *service.OpError
+	if !errors.As(err, &opErr) || opErr.Code != service.CodeAuth || !opErr.Retryable {
 		t.Fatalf("Download() error = %#v, want retryable auth OpError", err)
 	}
 	if !errors.Is(err, errPingOnlyFallback) {
@@ -399,7 +403,7 @@ func TestDownloadValidatesResponseBeforeCounting(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(test.handler)
 			defer server.Close()
-			p := New("")
+			p := New(Options{Server: ""})
 			p.client = server.Client()
 			p.jwt = "cached.payload.signature"
 			qms := qmsServer{Host: strings.TrimPrefix(server.URL, "https://")}
@@ -422,7 +426,7 @@ func TestDownloadRejectsTruncatedPayload(t *testing.T) {
 		_, _ = w.Write(make([]byte, 1024))
 	}))
 	defer server.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = server.Client()
 	p.jwt = "cached.payload.signature"
 	qms := qmsServer{Host: strings.TrimPrefix(server.URL, "https://")}
@@ -439,7 +443,7 @@ func TestDownloadRejectsPayloadLargerThanRequested(t *testing.T) {
 		_, _ = w.Write(make([]byte, 1_000_001))
 	}))
 	defer server.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = server.Client()
 	p.jwt = "cached.payload.signature"
 	qms := qmsServer{Host: strings.TrimPrefix(server.URL, "https://")}
@@ -457,6 +461,7 @@ func TestThroughputAuthIsRefreshedOnlyOnce(t *testing.T) {
 			mux := http.NewServeMux()
 			mux.HandleFunc("/api/server/gentoken", func(w http.ResponseWriter, _ *http.Request) {
 				tokenCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]string{"token": freshToken})
 			})
 			mux.HandleFunc("/download.php", func(w http.ResponseWriter, _ *http.Request) {
@@ -470,7 +475,7 @@ func TestThroughputAuthIsRefreshedOnlyOnce(t *testing.T) {
 			})
 			server := httptest.NewTLSServer(mux)
 			defer server.Close()
-			p := New("")
+			p := New(Options{Server: ""})
 			p.client = server.Client()
 			p.apiBase = server.URL
 			p.browserKey = "browser-key-long-enough"
@@ -498,7 +503,7 @@ func TestUploadDoesNotConfirmFailedResponse(t *testing.T) {
 		http.Error(w, "failed", http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = server.Client()
 	p.jwt = "cached.payload.signature"
 	qms := qmsServer{Host: strings.TrimPrefix(server.URL, "https://")}
@@ -513,10 +518,10 @@ func TestUploadDoesNotConfirmFailedResponse(t *testing.T) {
 
 func TestDecodeJSONLimitedRejectsOversizedAndTrailingResponses(t *testing.T) {
 	var destination map[string]any
-	if err := decodeJSONLimited(strings.NewReader(`{"ok":true}`+strings.Repeat(" ", 64)), 32, &destination); err == nil {
+	if err := service.DecodeJSONLimited(strings.NewReader(`{"ok":true}`+strings.Repeat(" ", 64)), 32, &destination); err == nil {
 		t.Fatal("oversized JSON response was accepted")
 	}
-	if err := decodeJSONLimited(strings.NewReader(`{"ok":true} {"second":true}`), 64, &destination); err == nil {
+	if err := service.DecodeJSONLimited(strings.NewReader(`{"ok":true} {"second":true}`), 64, &destination); err == nil {
 		t.Fatal("multiple JSON values were accepted")
 	}
 }
@@ -532,7 +537,7 @@ func TestExtractBrowserKeyRejectsCrossOriginAssets(t *testing.T) {
 		_, _ = io.WriteString(w, `<script src="`+external.URL+`/bundle.js"></script>`)
 	}))
 	defer page.Close()
-	p := New("")
+	p := New(Options{Server: ""})
 	p.client = page.Client()
 	p.apiBase = page.URL
 	if _, err := p.extractBrowserKey(context.Background()); err == nil {
@@ -575,19 +580,252 @@ func TestNativeCalculationsAndReconnectServerRotation(t *testing.T) {
 func TestErrorClassification(t *testing.T) {
 	tests := []struct {
 		err       error
-		code      provider.ErrorCode
+		code      service.ErrorCode
 		retryable bool
 	}{
-		{err: context.Canceled, code: provider.CodeCanceled, retryable: false},
-		{err: context.DeadlineExceeded, code: provider.CodeTimeout, retryable: true},
-		{err: errors.New("Content-Length при скачивании равен 1, ожидалось 2"), code: provider.CodeProtocol, retryable: false},
-		{err: errors.New("gentoken вернул состояние 403 Forbidden"), code: provider.CodeAuth, retryable: true},
-		{err: errors.New("connection reset"), code: provider.CodeUnavailable, retryable: true},
+		{err: context.Canceled, code: service.CodeCanceled, retryable: false},
+		{err: context.DeadlineExceeded, code: service.CodeTimeout, retryable: true},
+		{err: service.ProtocolError(errors.New("Content-Length при скачивании равен 1, ожидалось 2")), code: service.CodeProtocol, retryable: false},
+		{err: &service.HTTPStatusError{StatusCode: http.StatusForbidden, Status: "403 Forbidden", Operation: "gentoken"}, code: service.CodeAuth, retryable: true},
+		{err: errors.New("connection reset"), code: service.CodeUnavailable, retryable: true},
 	}
 	for _, test := range tests {
-		code := errorCode(test.err)
-		if code != test.code || retryableForCode(code) != test.retryable {
-			t.Errorf("error %q: code=%s retryable=%t, want %s/%t", test.err, code, retryableForCode(code), test.code, test.retryable)
+		code := service.ClassifyError(test.err)
+		if code != test.code || service.RetryableCode(code) != test.retryable {
+			t.Errorf("error %q: code=%s retryable=%t, want %s/%t", test.err, code, service.RetryableCode(code), test.code, test.retryable)
 		}
+	}
+}
+
+func TestDetectConnection_ReturnsIPAndISP(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/asn_provider/ip", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "test-browser-key" {
+			http.Error(w, "missing key", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = io.WriteString(w, `{"ip":"2001:db8::7"}`)
+	})
+	mux.HandleFunc("/api/asn_provider/asn", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"2001:db8::7","provider_name":"Тест Телеком"}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	p := New(Options{})
+	p.client = server.Client()
+	p.apiBase = server.URL
+	p.browserKey = "test-browser-key"
+	info, err := p.DetectConnection(context.Background())
+	if err != nil {
+		t.Fatalf("DetectConnection() error = %v", err)
+	}
+	if got := info.ExternalIP.String(); got != "2001:db8::7" {
+		t.Errorf("ExternalIP = %q, want 2001:db8::7", got)
+	}
+	if info.ISP != "Тест Телеком" || len(info.Warnings) != 0 {
+		t.Errorf("ConnectionInfo = %+v, want ISP without warnings", info)
+	}
+}
+
+func TestDetectConnection_KeepsIPWhenISPIsUnavailable(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/asn_provider/ip", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.9"}`)
+	})
+	mux.HandleFunc("/api/asn_provider/asn", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	p := New(Options{})
+	p.client = server.Client()
+	p.apiBase = server.URL
+	info, err := p.DetectConnection(context.Background())
+	if err != nil {
+		t.Fatalf("DetectConnection() error = %v", err)
+	}
+	if got := info.ExternalIP.String(); got != "203.0.113.9" || info.ISP != "" || len(info.Warnings) != 1 {
+		t.Fatalf("ConnectionInfo = %+v, want valid IP and one ISP warning", info)
+	}
+}
+
+func TestDetectConnection_RejectsInvalidIPResponse(t *testing.T) {
+	tests := map[string]func(http.ResponseWriter){
+		"malformed JSON": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ip":`)
+		},
+		"wrong content type": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = io.WriteString(w, `{"ip":"203.0.113.9"}`)
+		},
+		"invalid IP": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"ip":"not-an-ip"}`)
+		},
+		"oversized": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, strings.Repeat(" ", maxConnectionBytes+1))
+		},
+	}
+	for name, response := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				response(w)
+			}))
+			defer server.Close()
+			p := New(Options{})
+			p.client = server.Client()
+			p.apiBase = server.URL
+			if _, err := p.DetectConnection(context.Background()); err == nil {
+				t.Fatal("DetectConnection() error = nil, want protocol error")
+			}
+		})
+	}
+}
+
+func TestDetectConnection_RotatesBrowserKeyOnce(t *testing.T) {
+	const newKey = "new-connection-key-123456"
+	var rejected atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/asn_provider/ip", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != newKey {
+			rejected.Add(1)
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.10"}`)
+	})
+	mux.HandleFunc("/api/asn_provider/asn", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.10","provider_name":"ISP"}`)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `<script src="/bundle.js"></script>`)
+	})
+	mux.HandleFunc("/bundle.js", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `new QMSLibrary({id:"`+newKey+`"})`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	p := New(Options{})
+	p.client = server.Client()
+	p.apiBase = server.URL
+	p.browserKey = "obsolete-key-123456789"
+	info, err := p.DetectConnection(context.Background())
+	if err != nil || !info.ExternalIP.IsValid() {
+		t.Fatalf("DetectConnection() = (%+v, %v), want success", info, err)
+	}
+	if rejected.Load() != 1 || p.currentBrowserKey() != newKey {
+		t.Fatalf("rejected=%d key=%q, want one rejection and rotated key", rejected.Load(), p.currentBrowserKey())
+	}
+}
+
+func TestDetectConnection_DoesNotUseISPFromMismatchedIP(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/asn_provider/ip", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.1"}`)
+	})
+	mux.HandleFunc("/api/asn_provider/asn", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.2","provider_name":"Wrong ISP"}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	p := New(Options{})
+	p.client = server.Client()
+	p.apiBase = server.URL
+	info, err := p.DetectConnection(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ISP != "" || len(info.Warnings) != 1 {
+		t.Fatalf("ConnectionInfo = %+v, want ignored ISP and warning", info)
+	}
+}
+
+func TestDetectConnection_RejectsIPEndpoint5xx(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	p := New(Options{})
+	p.client = server.Client()
+	p.apiBase = server.URL
+	_, err := p.DetectConnection(context.Background())
+	var operationError *service.OpError
+	if !errors.As(err, &operationError) || operationError.Code != service.CodeUnavailable || !operationError.Retryable {
+		t.Fatalf("DetectConnection() error = %#v, want retryable unavailable", err)
+	}
+}
+
+func TestDetectConnection_MissingISPIsWarning(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/asn_provider/ip", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.20"}`)
+	})
+	mux.HandleFunc("/api/asn_provider/asn", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ip":"203.0.113.20","provider_name":"  "}`)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	p := New(Options{})
+	p.client = server.Client()
+	p.apiBase = server.URL
+	info, err := p.DetectConnection(context.Background())
+	if err != nil || !info.ExternalIP.IsValid() || info.ISP != "" || len(info.Warnings) != 1 {
+		t.Fatalf("DetectConnection() = (%+v, %v)", info, err)
+	}
+}
+
+func TestDetectConnection_Cancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	p := New(Options{})
+	_, err := p.DetectConnection(ctx)
+	var operationError *service.OpError
+	if !errors.Is(err, context.Canceled) || !errors.As(err, &operationError) || operationError.Code != service.CodeCanceled {
+		t.Fatalf("DetectConnection() error = %#v, want canceled OpError", err)
+	}
+}
+
+func TestDetectConnection_RotatesBrowserKeyOnlyOnceAfterRepeatedRejection(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			var apiCalls, pageCalls atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/asn_provider/ip", func(w http.ResponseWriter, _ *http.Request) {
+				apiCalls.Add(1)
+				w.WriteHeader(status)
+			})
+			mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+				pageCalls.Add(1)
+				_, _ = io.WriteString(w, `<script src="/bundle.js"></script>`)
+			})
+			mux.HandleFunc("/bundle.js", func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, `new QMSLibrary({id:"still-rejected-key"})`)
+			})
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			p := New(Options{})
+			p.client = server.Client()
+			p.apiBase = server.URL
+			if _, err := p.DetectConnection(context.Background()); err == nil {
+				t.Fatal("DetectConnection() error = nil")
+			}
+			if apiCalls.Load() != 2 || pageCalls.Load() != 1 {
+				t.Fatalf("api calls=%d page calls=%d, want 2/1", apiCalls.Load(), pageCalls.Load())
+			}
+		})
 	}
 }

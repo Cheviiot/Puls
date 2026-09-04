@@ -15,7 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/Cheviiot/Puls/internal/provider"
+	"github.com/Cheviiot/Puls/internal/service"
 )
 
 func TestHostOf(t *testing.T) {
@@ -64,7 +64,7 @@ func TestProbeURLValidation(t *testing.T) {
 }
 
 func TestMedianAbsoluteDeviationIgnoresOneQueuedResponse(t *testing.T) {
-	got := provider.MedianAbsoluteDeviation([]float64{10, 10.2, 80})
+	got := service.MedianAbsoluteDeviation([]float64{10, 10.2, 80})
 	if got < 0.19 || got > 0.21 {
 		t.Errorf("medianAbsoluteDeviation() = %v, want about 0.2", got)
 	}
@@ -101,7 +101,7 @@ func TestDiscoveryPingAndDownloadProtocol(t *testing.T) {
 	server = httptest.NewTLSServer(mux)
 	defer server.Close()
 
-	p := New()
+	p := New(Options{})
 	p.client = server.Client()
 	p.probesURL = server.URL + "/get-probes"
 	selected, err := p.SelectServer(context.Background())
@@ -157,7 +157,7 @@ func TestPingIsSequentialPerCDNAndParallelAcrossCDNs(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.client = server.Client()
 	p.latencyURLs = []string{server.URL + "/a", server.URL + "/b"}
 	result, err := p.Ping(context.Background())
@@ -175,6 +175,29 @@ func TestPingIsSequentialPerCDNAndParallelAcrossCDNs(t *testing.T) {
 	}
 }
 
+func TestPingKeepsValidSamplesAfterOneRequestFails(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			http.Error(w, "temporary", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	p := New(Options{})
+	p.client = server.Client()
+	p.latencyURLs = []string{server.URL}
+
+	result, err := p.Ping(context.Background())
+	if err != nil {
+		t.Fatalf("Ping() error = %v", err)
+	}
+	if requests.Load() != 4 || result.Samples != 3 {
+		t.Fatalf("requests=%d samples=%d, want all four attempts and three valid samples", requests.Load(), result.Samples)
+	}
+}
+
 func TestDiscoveryRejectsMalformedProbeSchemaWithoutReplacingState(t *testing.T) {
 	var malformed atomic.Bool
 	var server *httptest.Server
@@ -189,7 +212,7 @@ func TestDiscoveryRejectsMalformedProbeSchemaWithoutReplacingState(t *testing.T)
 	}))
 	defer server.Close()
 
-	p := New()
+	p := New(Options{})
 	p.client = server.Client()
 	p.probesURL = server.URL
 	if _, err := p.SelectServer(context.Background()); err != nil {
@@ -266,7 +289,7 @@ func TestDiscoveryValidatesEveryProbe(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(document)
 			}))
 			defer server.Close()
-			p := New()
+			p := New(Options{})
 			p.client = server.Client()
 			p.probesURL = server.URL
 			if _, err := p.SelectServer(context.Background()); err == nil {
@@ -300,7 +323,7 @@ func TestDiscoveryRejectsUnexpectedContentTypeAndOversizedBody(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(tt.handler)
 			defer server.Close()
-			p := New()
+			p := New(Options{})
 			p.client = server.Client()
 			p.probesURL = server.URL
 			if _, err := p.SelectServer(context.Background()); err == nil {
@@ -313,12 +336,12 @@ func TestDiscoveryRejectsUnexpectedContentTypeAndOversizedBody(t *testing.T) {
 func TestDiscoveryClassifiesHTTPStatus(t *testing.T) {
 	tests := []struct {
 		status    int
-		code      provider.ErrorCode
+		code      service.ErrorCode
 		retryable bool
 	}{
-		{status: http.StatusForbidden, code: provider.CodeProtocol, retryable: false},
-		{status: http.StatusTooManyRequests, code: provider.CodeProtocol, retryable: true},
-		{status: http.StatusServiceUnavailable, code: provider.CodeUnavailable, retryable: true},
+		{status: http.StatusForbidden, code: service.CodeProtocol, retryable: false},
+		{status: http.StatusTooManyRequests, code: service.CodeProtocol, retryable: true},
+		{status: http.StatusServiceUnavailable, code: service.CodeUnavailable, retryable: true},
 	}
 	for _, tt := range tests {
 		t.Run(http.StatusText(tt.status), func(t *testing.T) {
@@ -326,13 +349,13 @@ func TestDiscoveryClassifiesHTTPStatus(t *testing.T) {
 				w.WriteHeader(tt.status)
 			}))
 			defer server.Close()
-			p := New()
+			p := New(Options{})
 			p.client = server.Client()
 			p.probesURL = server.URL
 			_, err := p.SelectServer(context.Background())
-			var opErr *provider.OpError
+			var opErr *service.OpError
 			if !errors.As(err, &opErr) {
-				t.Fatalf("SelectServer() error = %v, want *provider.OpError", err)
+				t.Fatalf("SelectServer() error = %v, want *service.OpError", err)
 			}
 			if opErr.Code != tt.code || opErr.Retryable != tt.retryable {
 				t.Fatalf("SelectServer() error = %+v, want code=%s retryable=%t", opErr, tt.code, tt.retryable)
@@ -353,7 +376,7 @@ func TestDiscoveryDoesNotFollowRedirects(t *testing.T) {
 		http.Redirect(w, r, "/target", http.StatusFound)
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.client.Transport = server.Client().Transport
 	p.probesURL = server.URL
 	if _, err := p.SelectServer(context.Background()); err == nil {
@@ -371,7 +394,7 @@ func TestDownloadRejectsTruncatedBody(t *testing.T) {
 		_, _ = w.Write(make([]byte, 10))
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.client = server.Client()
 	var recorded atomic.Int64
 	if bytes, err := p.downloadProbe(context.Background(), server.URL, make([]byte, 32), func() {}, func(n int64) { recorded.Add(n) }); err == nil || bytes == 0 {
@@ -387,7 +410,7 @@ func TestDownloadRejectsHTTP5xxWithoutBytes(t *testing.T) {
 		http.Error(w, "failed", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.client = server.Client()
 	var recorded atomic.Int64
 	if bytes, err := p.downloadProbe(context.Background(), server.URL, make([]byte, 32), func() {}, func(n int64) { recorded.Add(n) }); err == nil || bytes != 0 || recorded.Load() != 0 {
@@ -440,7 +463,7 @@ func TestDownloadValidatesHeadersBeforeBecomingReady(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewTLSServer(tt.handler)
 			defer server.Close()
-			p := New()
+			p := New(Options{})
 			p.client = server.Client()
 			var ready atomic.Bool
 			var recorded atomic.Int64
@@ -461,7 +484,7 @@ func TestDownloadValidatesNative50MiBProbeSize(t *testing.T) {
 		_, _ = w.Write(make([]byte, 1024))
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.client = server.Client()
 	var ready atomic.Bool
 	var recorded atomic.Int64
@@ -500,23 +523,20 @@ func TestUploadWebSocketFallsBackToConfirmedHTTP(t *testing.T) {
 	server = httptest.NewTLSServer(mux)
 	defer server.Close()
 
-	p := New()
+	var fallbackLogged atomic.Bool
+	p := New(Options{Log: func(format string, _ ...any) {
+		if strings.Contains(format, "резервный") {
+			fallbackLogged.Store(true)
+		}
+	}})
 	p.client = server.Client()
 	p.dialer.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 	var confirmed atomic.Int64
-	var fallbackLogged atomic.Bool
 	err := p.uploadWorker(ctx, uploadProbe{
 		postURL: server.URL + "/upload", websocketURL: "wss" + strings.TrimPrefix(server.URL, "https") + "/ws",
-	}, make([]byte, 1024), provider.MeasurementConfig{
-		Duration: 3 * time.Second,
-		Verbose: func(format string, _ ...any) {
-			if strings.Contains(format, "резервный") {
-				fallbackLogged.Store(true)
-			}
-		},
-	}, func() {}, func(n int64) { confirmed.Add(n) })
+	}, make([]byte, 1024), service.MeasurementConfig{Duration: 3 * time.Second}, func() {}, func(n int64) { confirmed.Add(n) })
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("uploadWorker() error = %v, want deadline after fallback loop", err)
 	}
@@ -554,7 +574,7 @@ func TestWebSocketUploadAcceptsZeroControlAck(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.dialer.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -618,7 +638,7 @@ func TestWebSocketUploadCountsOnlyAcknowledgedBinaryFrame(t *testing.T) {
 	}))
 	defer server.Close()
 
-	p := New()
+	p := New(Options{})
 	p.dialer.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
 	var ready atomic.Bool
 	var confirmed atomic.Int64
@@ -639,7 +659,7 @@ func TestWebSocketUploadHonorsDiscoveryConnectionTimeout(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.dialer.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -661,7 +681,7 @@ func TestHTTPUploadRejectsOversizedResponseWithoutConfirmation(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.client = server.Client()
 	var ready atomic.Bool
 	var confirmed atomic.Int64
@@ -676,8 +696,8 @@ func TestHTTPUploadRejectsOversizedResponseWithoutConfirmation(t *testing.T) {
 
 func TestErrorCodeClassifiesWebSocketSchemaViolation(t *testing.T) {
 	err := fmt.Errorf("upload stream: %w", errInvalidWebsocketAcknowledgement)
-	if got := errorCode(err); got != provider.CodeProtocol {
-		t.Fatalf("errorCode(%v) = %s, want %s", err, got, provider.CodeProtocol)
+	if got := service.ClassifyError(err); got != service.CodeProtocol {
+		t.Fatalf("service.ClassifyError(%v) = %s, want %s", err, got, service.CodeProtocol)
 	}
 }
 
@@ -696,7 +716,7 @@ func websocketUploadWithReply(t *testing.T, messageType int, message []byte) err
 		_ = conn.WriteMessage(messageType, message)
 	}))
 	defer server.Close()
-	p := New()
+	p := New(Options{})
 	p.dialer.TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -736,43 +756,43 @@ func internetPageHTML(body string) string {
 	return "<html><head></head><body><script>" + body + "</script></body></html>"
 }
 
-func TestDetectExternalIPParsesV4(t *testing.T) {
+func TestDetectConnection_ParsesIPv4(t *testing.T) {
 	html := internetPageHTML(`Client.default({"blackbox":{"isValid":false},"ip":{"v4":"203.0.113.7","v6":null},"other":{"nested":{"a":1}}})`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, html)
 	}))
 	defer server.Close()
 
-	p := New()
+	p := New(Options{})
 	p.internetPageURL = server.URL
-	ip, err := p.DetectExternalIP(context.Background())
+	info, err := p.DetectConnection(context.Background())
 	if err != nil {
-		t.Fatalf("DetectExternalIP() error = %v", err)
+		t.Fatalf("DetectConnection() error = %v", err)
 	}
-	if ip != "203.0.113.7" {
-		t.Fatalf("DetectExternalIP() = %q, want %q", ip, "203.0.113.7")
+	if got := info.ExternalIP.String(); got != "203.0.113.7" {
+		t.Fatalf("ExternalIP = %q, want %q", got, "203.0.113.7")
 	}
 }
 
-func TestDetectExternalIPFallsBackToV6(t *testing.T) {
+func TestDetectConnection_FallsBackToIPv6(t *testing.T) {
 	html := internetPageHTML(`Client.default({"ip":{"v4":"","v6":"2001:db8::1"}})`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, html)
 	}))
 	defer server.Close()
 
-	p := New()
+	p := New(Options{})
 	p.internetPageURL = server.URL
-	ip, err := p.DetectExternalIP(context.Background())
+	info, err := p.DetectConnection(context.Background())
 	if err != nil {
-		t.Fatalf("DetectExternalIP() error = %v", err)
+		t.Fatalf("DetectConnection() error = %v", err)
 	}
-	if ip != "2001:db8::1" {
-		t.Fatalf("DetectExternalIP() = %q, want %q", ip, "2001:db8::1")
+	if got := info.ExternalIP.String(); got != "2001:db8::1" {
+		t.Fatalf("ExternalIP = %q, want %q", got, "2001:db8::1")
 	}
 }
 
-func TestDetectExternalIPRejectsInvalidResponses(t *testing.T) {
+func TestDetectConnection_RejectsInvalidResponses(t *testing.T) {
 	tests := map[string]struct {
 		status int
 		body   string
@@ -791,25 +811,25 @@ func TestDetectExternalIPRejectsInvalidResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			p := New()
+			p := New(Options{})
 			p.internetPageURL = server.URL
-			if _, err := p.DetectExternalIP(context.Background()); err == nil {
-				t.Fatal("DetectExternalIP() error = nil, want error")
+			if _, err := p.DetectConnection(context.Background()); err == nil {
+				t.Fatal("DetectConnection() error = nil, want error")
 			}
 		})
 	}
 }
 
-func TestDetectExternalIPRejectsOversizedPage(t *testing.T) {
+func TestDetectConnection_RejectsOversizedPage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(make([]byte, maxInternetPageSize+1))
 	}))
 	defer server.Close()
 
-	p := New()
+	p := New(Options{})
 	p.internetPageURL = server.URL
-	if _, err := p.DetectExternalIP(context.Background()); err == nil {
-		t.Fatal("DetectExternalIP() error = nil, want error for oversized page")
+	if _, err := p.DetectConnection(context.Background()); err == nil {
+		t.Fatal("DetectConnection() error = nil, want error for oversized page")
 	}
 }
 
