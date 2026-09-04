@@ -83,11 +83,11 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 Для конкретной версии используются параметры `--version` и `-Version`:
 
 ```bash
-sh install.sh --version 0.2.0-rc.1
+sh install.sh --version 0.2.0
 ```
 
 ```powershell
-.\install.ps1 -Version 0.2.0-rc.1
+.\install.ps1 -Version 0.2.0
 ```
 
 `releases/latest` указывает на последний стабильный выпуск и не выбирает
@@ -109,9 +109,9 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 Версии и имена согласованы:
 
 ```text
-Git tag:       v0.2.0-rc.1
-Binary:        Puls 0.2.0-rc.1
-Archive:       Puls_0.2.0-rc.1_linux_amd64.tar.gz
+Git tag:       v0.2.0
+Binary:        Puls 0.2.0
+Archive:       Puls_0.2.0_linux_amd64.tar.gz
 Installer:     install.sh / install.ps1
 ```
 
