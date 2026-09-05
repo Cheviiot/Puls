@@ -165,6 +165,31 @@ func TestCollectReleaseArtifactsMarksCapabilitiesAndAndroid(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowBuildsUniversalAPKFromBundle(t *testing.T) {
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents := string(workflow)
+	for _, want := range []string{
+		"-name '*.aab'",
+		"bundletool build-apks",
+		"--mode=universal",
+		`apk="dist/Puls_${RELEASE_VERSION}_android.apk"`,
+	} {
+		if !strings.Contains(contents, want) {
+			t.Errorf("release workflow does not contain %q", want)
+		}
+	}
+	if strings.Contains(contents, "find cmd/puls -maxdepth 1 -type f -name '*.apk'") {
+		t.Error("release workflow still searches for an APK that fyne release does not produce")
+	}
+}
+
 func TestCopyReleaseInstallers(t *testing.T) {
 	root := t.TempDir()
 	output := filepath.Join(root, "dist")
