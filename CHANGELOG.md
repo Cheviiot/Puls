@@ -8,8 +8,11 @@
 
 ### Исправлено
 
-- Проверка Android-артефакта использует доступный в Build Tools `aapt2`, а
-  release workflow поддерживает полный ручной preflight без публикации тега.
+- Release workflow преобразует создаваемый Fyne Android App Bundle в
+  подписанный universal APK через проверенный `bundletool` и проверяет его
+  доступными в Android Build Tools утилитами.
+- Полный ручной preflight собирает и проверяет все артефакты без публикации
+  тега или GitHub Release.
 
 ## [0.3.1] - 2026-09-05
 

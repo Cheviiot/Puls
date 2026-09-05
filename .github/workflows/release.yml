@@ -204,7 +204,7 @@ jobs:
         run: |
           test -n "$KEYSTORE_BASE64"
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/puls-release.keystore"
-      - name: Build and sign APK
+      - name: Build signed Android bundle and universal APK
         working-directory: cmd/puls
         env:
           KEYSTORE_PASS: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}
@@ -220,16 +220,38 @@ jobs:
             --tags migrated_fynedo \
             --keystore "$RUNNER_TEMP/puls-release.keystore" --keystore-pass "$KEYSTORE_PASS" \
             --key-name "$KEY_ALIAS" --key-pass "$KEY_PASS"
+
+          mapfile -d '' -t bundle_files < <(find . -maxdepth 1 -type f -name '*.aab' -print0)
+          if [[ "${#bundle_files[@]}" -ne 1 ]]; then
+            echo "Ожидался один Android App Bundle, найдено: ${#bundle_files[@]}" >&2
+            exit 1
+          fi
+
+          store_pass_file="$RUNNER_TEMP/puls-keystore.pass"
+          key_pass_file="$RUNNER_TEMP/puls-key.pass"
+          printf '%s\n' "$KEYSTORE_PASS" > "$store_pass_file"
+          printf '%s\n' "$KEY_PASS" > "$key_pass_file"
+          chmod 0600 "$store_pass_file" "$key_pass_file"
+          trap 'rm -f "$store_pass_file" "$key_pass_file"' EXIT
+
+          apk_set="$RUNNER_TEMP/puls.apks"
+          apk_dir="$RUNNER_TEMP/puls-universal-apk"
+          bundletool build-apks \
+            --bundle="${bundle_files[0]}" --output="$apk_set" --mode=universal --overwrite \
+            --ks="$RUNNER_TEMP/puls-release.keystore" --ks-key-alias="$KEY_ALIAS" \
+            --ks-pass="file:$store_pass_file" --key-pass="file:$key_pass_file"
+          mkdir -p "$apk_dir" ../../dist
+          unzip -j "$apk_set" universal.apk -d "$apk_dir"
+          install -m 0644 "$apk_dir/universal.apk" "../../dist/Puls_${RELEASE_VERSION}_android.apk"
       - name: Verify signature and permissions
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          mapfile -t apk_files < <(find cmd/puls -maxdepth 1 -type f -name '*.apk' -print)
-          if [[ "${#apk_files[@]}" -ne 1 ]]; then
-            echo "Ожидался один APK, найдено: ${#apk_files[@]}" >&2
+          apk="dist/Puls_${RELEASE_VERSION}_android.apk"
+          if [[ ! -f "$apk" ]]; then
+            echo "Не найден universal APK: $apk" >&2
             exit 1
           fi
-          apk=${apk_files[0]}
           build_tools_dir=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -print | sort -V | tail -1)
           apksigner="$build_tools_dir/apksigner"
           aapt2="$build_tools_dir/aapt2"
@@ -247,8 +269,6 @@ jobs:
             echo "APK запрашивает лишние чувствительные разрешения" >&2
             exit 1
           fi
-          mkdir -p dist
-          mv "$apk" "dist/Puls_${RELEASE_VERSION}_android.apk"
       - name: Upload APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
