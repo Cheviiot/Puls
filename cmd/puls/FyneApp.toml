@@ -4,8 +4,8 @@ Website = "https://github.com/Cheviiot/Puls"
 Icon = "../../internal/gui/assets/Icon.png"
 Name = "Puls"
 ID = "io.github.cheviiot.puls"
-Version = "0.3.0"
-Build = 3000
+Version = "0.3.3"
+Build = 3003
 
 [LinuxAndBSD]
 GenericName = "Проверка скорости интернета"

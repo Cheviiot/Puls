@@ -535,8 +535,9 @@ if ! manifest_asset=$(awk -v wanted_os="$target_os" -v wanted_arch="$target_arch
   in_asset && /^[[:space:]]*"gui",?[[:space:]]*$/ { asset_gui = 1; next }
   in_asset && /^[[:space:]]*\},?[[:space:]]*$/ {
     if (os_count != 1 || arch_count != 1 || file_count != 1 || sha_count != 1) invalid = 1
-    if (schema == 2 && (kind_count != 1 || asset_kind != "archive" || asset_cli != 1)) invalid = 1
+    if (schema == 2 && kind_count != 1) invalid = 1
     if (asset_os == wanted_os && asset_arch == wanted_arch) {
+      if (schema == 2 && (asset_kind != "archive" || asset_cli != 1)) invalid = 1
       print asset_file " " asset_sha " " asset_gui
       matches++
     }

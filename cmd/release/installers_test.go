@@ -520,8 +520,8 @@ func TestShellInstallerManagesGUIShortcut(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifestDocument.Assets = append([]releaseManifestAsset{{
-		OS: "darwin", Arch: "amd64", File: "Puls_1.2.3_darwin_amd64.tar.gz",
-		SHA256: strings.Repeat("0", 64), Kind: "archive", Capabilities: []string{"cli", "gui"},
+		OS: "android", Arch: "universal", File: "Puls_1.2.3_android.apk",
+		SHA256: strings.Repeat("0", 64), Kind: "apk", Capabilities: []string{"gui"},
 	}}, manifestDocument.Assets...)
 	manifest, err = json.MarshalIndent(manifestDocument, "", "  ")
 	if err != nil {
