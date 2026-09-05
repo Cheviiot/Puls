@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Версия для полного preflight без публикации, например 0.3.2
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,15 +33,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - name: Validate tag
+      - name: Resolve version
         id: version
+        env:
+          PREFLIGHT_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Релизный тег должен иметь вид v1.2.3" >&2
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Релизный тег должен иметь вид v1.2.3" >&2
+              exit 1
+            fi
+            version=${GITHUB_REF_NAME#v}
+          else
+            version=$PREFLIGHT_VERSION
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Версия preflight должна иметь вид 1.2.3" >&2
             exit 1
           fi
-          version=${GITHUB_REF_NAME#v}
           IFS=. read -r major minor patch <<< "$version"
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "build=$((major * 1000000 + minor * 1000 + patch))" >> "$GITHUB_OUTPUT"
@@ -208,13 +224,23 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          apk=$(find cmd/puls -maxdepth 1 -type f -name '*.apk' -print -quit)
-          test -n "$apk"
-          apksigner=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -1)
-          apkanalyzer="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
-          test -x "$apksigner" && test -x "$apkanalyzer"
+          mapfile -t apk_files < <(find cmd/puls -maxdepth 1 -type f -name '*.apk' -print)
+          if [[ "${#apk_files[@]}" -ne 1 ]]; then
+            echo "Ожидался один APK, найдено: ${#apk_files[@]}" >&2
+            exit 1
+          fi
+          apk=${apk_files[0]}
+          build_tools_dir=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -print | sort -V | tail -1)
+          apksigner="$build_tools_dir/apksigner"
+          aapt2="$build_tools_dir/aapt2"
+          for tool in "$apksigner" "$aapt2"; do
+            if [[ ! -x "$tool" ]]; then
+              echo "Не найден Android verifier: $tool" >&2
+              exit 1
+            fi
+          done
           "$apksigner" verify --verbose --print-certs "$apk"
-          permissions=$("$apkanalyzer" manifest permissions "$apk")
+          permissions=$("$aapt2" dump permissions "$apk")
           printf '%s\n' "$permissions"
           grep -Fq 'android.permission.INTERNET' <<< "$permissions"
           if grep -Eq 'ACCESS_(FINE|COARSE)_LOCATION|READ_PHONE_STATE|READ_CONTACTS|RECORD_AUDIO|CAMERA' <<< "$permissions"; then
@@ -265,10 +291,12 @@ jobs:
         working-directory: dist
         run: sha256sum -c SHA256SUMS.txt
       - name: Attest artifacts
+        if: github.event_name == 'push'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: dist/SHA256SUMS.txt
       - name: Create and upload draft
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -307,6 +335,7 @@ jobs:
           fi
           trap - EXIT
       - name: Publish release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$GITHUB_REF_NAME" --draft=false
