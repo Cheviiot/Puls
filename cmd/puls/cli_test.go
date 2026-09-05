@@ -66,6 +66,16 @@ func TestParseHelpAndVersion(t *testing.T) {
 	}
 }
 
+func TestParseGUICommand(t *testing.T) {
+	cfg, err := parseConfig([]string{"gui", "--verbose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Command != commandGUI || !cfg.Verbose {
+		t.Fatalf("parseConfig(gui) = %+v", cfg)
+	}
+}
+
 func TestParseRejectsRemovedAndInvalidFlags(t *testing.T) {
 	cases := [][]string{
 		{"--ip"},

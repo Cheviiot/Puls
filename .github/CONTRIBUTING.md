@@ -17,6 +17,9 @@ go mod download
 go test ./...
 ```
 
+На ALT Workstation desktop-зависимости Fyne запускаются в Distrobox-контейнере
+`puls-fyne-dev`; точные команды приведены в [distribution.md](../docs/distribution.md).
+
 ## Перед pull request
 
 ```bash

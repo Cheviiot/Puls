@@ -98,10 +98,6 @@ func metricLabel(style *ui.Style, label string) string {
 	return rowIndent + style.Dim(ui.PadLabel(label, labelWidth))
 }
 
-func phaseFailure(style *ui.Style, err error) string {
-	return style.Red("не удалось") + style.Dim(" · "+humanError(err))
-}
-
 func formatServer(server service.Server) string {
 	switch {
 	case server.City != "" && server.Region != "":

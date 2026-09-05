@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Cheviiot/Puls/internal/gui"
 	"github.com/Cheviiot/Puls/internal/service"
 	"github.com/Cheviiot/Puls/internal/ui"
 )
@@ -197,6 +198,31 @@ func TestApplicationUsageAndCancellationExitCodes(t *testing.T) {
 	cancel()
 	if code := app.Run(ctx, []string{"yandex", "--json"}); code != 130 {
 		t.Errorf("cancellation code = %d", code)
+	}
+}
+
+func TestApplicationLaunchesGUI(t *testing.T) {
+	yandexBackend, speedtestBackend := successfulBackends()
+	app := testApplication(io.Discard, io.Discard, yandexBackend, speedtestBackend)
+	called := false
+	app.launchGUI = func(_ context.Context, options gui.Options) error {
+		called = true
+		if options.Version != version {
+			t.Fatalf("GUI version = %q", options.Version)
+		}
+		return nil
+	}
+	if code := app.Run(context.Background(), []string{"gui"}); code != 0 || !called {
+		t.Fatalf("Run(gui) = %d, called=%v", code, called)
+	}
+}
+
+func TestUnavailableGUIIsUsageFailure(t *testing.T) {
+	yandexBackend, speedtestBackend := successfulBackends()
+	app := testApplication(io.Discard, io.Discard, yandexBackend, speedtestBackend)
+	app.launchGUI = func(context.Context, gui.Options) error { return gui.ErrUnavailable }
+	if code := app.Run(context.Background(), []string{"gui"}); code != 2 {
+		t.Fatalf("Run(gui) = %d, want 2", code)
 	}
 }
 

@@ -4,7 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
+)
+
+type buildMode string
+
+const (
+	buildModeCLI buildMode = "cli"
+	buildModeGUI buildMode = "gui"
 )
 
 type target struct {
@@ -51,7 +59,29 @@ func parseTargets(value string, supported map[string]struct{}) ([]target, error)
 	return result, nil
 }
 
-func buildEnvironment(current []string, buildTarget target) []string {
+func parseBuildMode(value string) (buildMode, error) {
+	switch mode := buildMode(strings.ToLower(strings.TrimSpace(value))); mode {
+	case buildModeCLI, buildModeGUI:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("неизвестный режим сборки %q: выберите cli или gui", value)
+	}
+}
+
+func validateBuildTarget(mode buildMode, buildTarget target) error {
+	if mode != buildModeGUI {
+		return nil
+	}
+	if buildTarget.OS == "windows" && buildTarget.Arch == "arm64" {
+		return errors.New("GUI для windows/arm64 пока не поддерживается; используйте режим cli")
+	}
+	if buildTarget.OS != runtime.GOOS || buildTarget.Arch != runtime.GOARCH {
+		return fmt.Errorf("GUI-сборка %s/%s должна выполняться на соответствующем native runner", buildTarget.OS, buildTarget.Arch)
+	}
+	return nil
+}
+
+func buildEnvironment(current []string, buildTarget target, mode buildMode) []string {
 	result := make([]string, 0, len(current)+3)
 	for _, variable := range current {
 		if strings.HasPrefix(variable, "GOOS=") || strings.HasPrefix(variable, "GOARCH=") || strings.HasPrefix(variable, "CGO_ENABLED=") {
@@ -59,5 +89,9 @@ func buildEnvironment(current []string, buildTarget target) []string {
 		}
 		result = append(result, variable)
 	}
-	return append(result, "GOOS="+buildTarget.OS, "GOARCH="+buildTarget.Arch, "CGO_ENABLED=0")
+	cgo := "0"
+	if mode == buildModeGUI {
+		cgo = "1"
+	}
+	return append(result, "GOOS="+buildTarget.OS, "GOARCH="+buildTarget.Arch, "CGO_ENABLED="+cgo)
 }

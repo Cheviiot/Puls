@@ -18,10 +18,12 @@ type releaseManifest struct {
 }
 
 type releaseManifestAsset struct {
-	OS     string `json:"os"`
-	Arch   string `json:"arch"`
-	File   string `json:"file"`
-	SHA256 string `json:"sha256"`
+	OS           string   `json:"os"`
+	Arch         string   `json:"arch"`
+	File         string   `json:"file"`
+	SHA256       string   `json:"sha256"`
+	Kind         string   `json:"kind"`
+	Capabilities []string `json:"capabilities"`
 }
 
 func fileDigest(path string) ([sha256.Size]byte, error) {
@@ -47,12 +49,16 @@ func writeReleaseManifest(outputDir, version string, artifacts []artifact) (arti
 		if item.Target.OS == "" || item.Target.Arch == "" {
 			return artifact{}, fmt.Errorf("артефакт %q не содержит целевую систему и архитектуру", item.Name)
 		}
+		if item.Kind == "" || len(item.Capabilities) == 0 {
+			return artifact{}, fmt.Errorf("артефакт %q не содержит тип или возможности", item.Name)
+		}
 		assets = append(assets, releaseManifestAsset{
 			OS: item.Target.OS, Arch: item.Target.Arch, File: item.Name, SHA256: fmt.Sprintf("%x", item.Digest),
+			Kind: item.Kind, Capabilities: append([]string(nil), item.Capabilities...),
 		})
 	}
 	payload, err := json.MarshalIndent(releaseManifest{
-		SchemaVersion: 1,
+		SchemaVersion: 2,
 		Product:       "Puls",
 		Version:       version,
 		Assets:        assets,

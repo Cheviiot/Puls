@@ -1,6 +1,9 @@
 /dist/
 /puls
 /puls.exe
+*.apk
+*.keystore
+*.jks
 /coverage.out
 /coverage.html
 

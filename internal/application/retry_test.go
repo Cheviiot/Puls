@@ -1,4 +1,4 @@
-package main
+package application
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 func TestWithRetrySucceedsOnSecondAttempt(t *testing.T) {
 	calls := 0
-	err := withRetry(context.Background(), 2, func() error {
+	err := withRetry(t.Context(), 2, func() error {
 		calls++
 		if calls == 1 {
 			return errors.New("temporary")
@@ -30,6 +30,19 @@ func TestWithRetryStopsOnPermanentTypedError(t *testing.T) {
 		return want
 	})
 	if !errors.Is(err, want) || calls != 1 {
+		t.Fatalf("withRetry = (%v, %d calls)", err, calls)
+	}
+}
+
+func TestWithRetryStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	err := withRetry(ctx, 2, func() error {
+		calls++
+		cancel()
+		return errors.New("temporary")
+	})
+	if !errors.Is(err, context.Canceled) || calls != 1 {
 		t.Fatalf("withRetry = (%v, %d calls)", err, calls)
 	}
 }

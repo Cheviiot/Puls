@@ -5,7 +5,7 @@
 
 ## Продукт и язык
 
-Puls — кроссплатформенный CLI для русскоязычных пользователей. Он измеряет
+Puls — кроссплатформенное GUI- и CLI-приложение для русскоязычных пользователей. Оно измеряет
 ping, download и upload через два сервиса измерения:
 
 - `yandex` — Яндекс.Интернетометр;
@@ -31,6 +31,7 @@ puls yandex [options]
 puls speedtest [options]
 puls all [options]
 puls ip [speedtest|yandex] [options]
+puls gui
 puls help
 puls version
 ```
@@ -60,6 +61,8 @@ puls version
 ## Архитектурные границы
 
 - `cmd/puls`: parsing, configuration, orchestration, results, JSON, rendering;
+- `internal/application`: единая orchestration и модели для CLI/GUI;
+- `internal/gui`: Fyne dashboard, тема, lifecycle и безопасные preferences;
 - `cmd/release`: targets, builder, archives, manifest, checksums, installers;
 - `internal/measure`: общий concurrency engine;
 - `internal/service`: `Backend`, `ConnectionInfoBackend`, общие types/helpers;
@@ -160,6 +163,19 @@ Measurement result содержит `service`, `status`, `server`, `phases`, `er
 Изменение CLI/JSON требует синхронного обновления help, README, CHANGELOG и
 golden tests.
 
+## GUI
+
+- Используй Fyne v2 и обновляй widgets из goroutine только через `fyne.Do`.
+- CLI и GUI обязаны вызывать `internal/application.Runner`; не дублируй
+  orchestration, retry или преобразование результатов во frontend.
+- Сохраняй только тему, сервис, профиль, duration, connections, phase и размер
+  окна. Не сохраняй IP, ISP, server, результаты, warnings, logs и credentials.
+- Держи один mobile-first dashboard без gauges и истории: cyan accent,
+  системная/светлая/тёмная темы, понятные состояния start/stop/error.
+- Background/close отменяет активное измерение через context.
+- `puls` без аргументов остаётся CLI; `puls gui` открывает окно; Android всегда
+  запускает GUI.
+
 ## Порядок работы
 
 1. Прочитай инструкции и `git status --short`.
@@ -193,13 +209,15 @@ bytes, malformed frames/JSON, 401/403/5xx, disconnect, partial success,
 reconnect, deadline и cancellation. Live tests находятся за tag `live`;
 throughput запускается только с `PULS_LIVE_THROUGHPUT=1`.
 
-Системные dev-зависимости на ALT Workstation устанавливай в Distrobox. Для
-PowerShell используй контейнер `puls-powershell-dev`, описанный в
-`docs/distribution.md`; Windows integration test остаётся обязательным в CI.
+Системные dev-зависимости на ALT Workstation устанавливай в Distrobox. Fyne
+собирай и тестируй в `puls-fyne-dev`, PowerShell — в `puls-powershell-dev`;
+команды описаны в `docs/distribution.md`. Windows integration test обязателен в CI.
 
-Release builder обязан сохранять шесть targets, CGO=0, reproducible archives,
-manifest, SHA-256, installers, PATH/update/uninstall и ASCII without BOM для
-`install.ps1`.
+Release builder обязан сохранять шесть desktop targets: native CGO GUI+CLI для
+поддерживаемых платформ и `nogui` для Windows arm64. Сохраняй reproducible
+archives, manifest schema 2, SHA-256, installers, PATH/update/uninstall,
+управляемые shortcuts и ASCII without BOM для `install.ps1`. Android APK
+подписывается только секретами GitHub Actions; keystore не добавлять в Git.
 
 ## Definition of Done
 

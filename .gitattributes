@@ -12,3 +12,6 @@
 *.gz binary
 *.zip binary
 *.exe binary
+*.apk binary
+*.ico binary
+*.png binary

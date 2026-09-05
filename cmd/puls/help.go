@@ -14,14 +14,16 @@ func printHelp(w io.Writer, style *ui.Style) {
 	fmt.Fprintln(w, "\nИСПОЛЬЗОВАНИЕ")
 	fmt.Fprintln(w, "  puls [service] [options]")
 	fmt.Fprintln(w, "  puls ip [service] [options]")
+	fmt.Fprintln(w, "  puls gui [options]")
 
 	fmt.Fprintln(w, "\nСЕРВИСЫ")
 	printHelpRow(w, "yandex", "Яндекс.Интернетометр")
-	printHelpRow(w, "speedtest", "speedtest.ru · Ростелеком")
+	printHelpRow(w, "speedtest", "speedtest.ru")
 	printHelpRow(w, "all", "оба сервиса последовательно")
 
 	fmt.Fprintln(w, "\nКОМАНДЫ")
 	printHelpRow(w, "ip [service]", "внешний IP и интернет-провайдер")
+	printHelpRow(w, "gui", "открыть графический интерфейс")
 	printHelpRow(w, "help", "показать справку")
 	printHelpRow(w, "version", "показать версию")
 
@@ -42,6 +44,7 @@ func printHelp(w io.Writer, style *ui.Style) {
 
 	fmt.Fprintln(w, "\nПРИМЕРЫ")
 	printHelpExample(w, "puls", "выбрать сервис")
+	printHelpExample(w, "puls gui", "открыть графический интерфейс")
 	printHelpExample(w, "puls yandex", "полная проверка через Яндекс")
 	printHelpExample(w, "puls all --profile quick", "быстро проверить оба сервиса")
 	printHelpExample(w, "puls speedtest --only ping", "измерить только задержку")

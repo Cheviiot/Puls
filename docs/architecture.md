@@ -1,82 +1,31 @@
-# Архитектура Puls
+# Архитектура
 
-Puls разделяет CLI, протоколы сервисов измерения, общий throughput engine и
-релизную упаковку. Публичные границы проекта — команды, JSON schema и release
-assets; Go-пакеты находятся в `internal`.
+Puls имеет два интерфейса над одним application-слоем:
 
-## Термины
-
-- **Сервис измерения** — Яндекс.Интернетометр или speedtest.ru.
-- **Сервер измерения** — выбранный CDN/QMS host.
-- **Интернет-провайдер** — оператор подключения пользователя.
-- **Endpoint** и **probe** используются только внутри протокола и verbose-лога.
-
-## Поток выполнения
-
-```mermaid
-flowchart TD
-    CLI[cmd/puls\nparsing и orchestration] --> Backend[service.Backend]
-    CLI --> Connection[ConnectionInfoBackend]
-    Backend --> Yandex[service/yandex]
-    Backend --> Speedtest[service/speedtestru]
-    Yandex --> Engine[measure.Run]
-    Speedtest --> Engine
-    CLI --> Result[JSON envelope / human renderer]
-    Release[cmd/release] --> Assets[archives / manifest / installers]
+```text
+cmd/puls (CLI) ─┐
+                ├─ internal/application ─ internal/service ─ Яндекс / speedtest.ru
+internal/gui ───┘                         └ internal/measure
 ```
 
-Измерение проходит `select → ping → download → upload`. В `all` сервисы
-выполняются последовательно и не делят канал. Определение подключения для
-`all --show-ip` выполняется один раз: speedtest.ru, затем Яндекс при ошибке.
-
-## Ответственность
-
-| Каталог | Содержимое |
-| --- | --- |
-| `cmd/puls` | parsing, configuration, orchestration, result models, JSON и rendering |
-| `cmd/release` | targets, build, archives, manifest, checksums и installers |
-| `internal/service` | `Backend`, `ConnectionInfoBackend`, типы, HTTP/runtime helpers |
-| `internal/service/yandex` | discovery, connection info, ping, throughput и upload protocol |
-| `internal/service/speedtestru` | discovery, connection info, ping, authorization и throughput |
-| `internal/measure` | независимый concurrency engine и точный byte accounting |
-| `internal/ui` | TTY detection, выбор, стили и адаптивный progress |
-
-Зависимости и logger передаются через constructors/options. Сетевые реализации
-не пишут в terminal напрямую, а measurement configuration не содержит UI.
-
-## Инварианты измерения
-
-- Таймер начинается после готовности первого stream; warm-up не учитывается.
-- В результат входят только подтверждённые протоколом или успешным HTTP-ответом
+- `internal/application` управляет выбором сервиса, фазами, fallback и
+  формирует единый результат.
+- `internal/gui` содержит Fyne-интерфейс, тему и только безопасные настройки.
+- `internal/service` определяет `Backend`, типизированные ошибки и сетевые
+  контракты; подпакеты реализуют first-party протоколы сервисов.
+- `internal/measure` отвечает за workers, reconnect, deadline и подтверждённые
   байты.
-- Status, Content-Type, Content-Encoding, JSON schema, WebSocket message type и
-  payload size проверяются до учёта данных.
-- Ошибки workers агрегируются; отказ всех streams завершает фазу раньше.
-- Stream может переподключиться один раз, throughput целиком не повторяется.
-- Context cancellation закрывает I/O и ожидает cooperative workers.
-- Ошибка отдельного сервиса не останавливает `all`.
+- `cmd/release` собирает native GUI/CLI архивы, APK, manifest и checksums.
 
-Ошибки имеют `service`, `phase`, стабильный `code`, `retryable` и исходный
-`cause`. Классификация основана на typed/sentinel errors, `errors.Is/As`,
-`context` и `net.Error`, а не на тексте сообщения.
+Измерение выполняется последовательно: `select → ping → download → upload`.
+Ошибка отдельного сервиса не останавливает `all`. GUI получает immutable
+события runner и обновляет widgets только через `fyne.Do`.
 
-## Подключение и приватность
+Инварианты: timer начинается после ready, warm-up не учитывается, принимаются
+только проверенные ответы и подтверждённые байты, worker имеет один reconnect,
+а cancellation закрывает I/O. Сетевой сбой никогда не становится успешным
+нулевым результатом.
 
-`ConnectionInfo.ExternalIP` обязателен для успеха; `ISP` необязателен. Яндекс
-возвращает IP из ограниченного bootstrap-состояния страницы, speedtest.ru — IP
-и ISP из `/api/asn_provider/ip` и `/api/asn_provider/asn`. Ответы ограничиваются
-по размеру и проверяются как единственное JSON-значение.
-
-JWT, browser keys, IP-ответы и результаты не записываются на диск и не попадают
-в verbose-лог. Puls не отправляет telemetry.
-
-## Проверка
-
-1. Unit и local HTTP/WebSocket mock tests.
-2. `go test -count=10`, race, vet, staticcheck и govulncheck.
-3. actionlint, shellcheck и integration tests установщиков.
-4. Live discovery/IP/ping за tag `live`.
-5. Live throughput только с `PULS_LIVE_THROUGHPUT=1`.
-
-Релизный контракт описан в [distribution.md](distribution.md), нормативные
-правила для AI-разработчиков — в [AGENTS.md](../AGENTS.md).
+GUI сохраняет тему, сервис, профиль, длительность, число соединений, выбранную
+фазу и размер окна. IP, ISP, сервер, результаты, diagnostics и credentials на
+диск не записываются.

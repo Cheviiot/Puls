@@ -17,6 +17,7 @@ type command string
 const (
 	commandMeasure command = "measure"
 	commandIP      command = "ip"
+	commandGUI     command = "gui"
 	commandHelp    command = "help"
 	commandVersion command = "version"
 )
@@ -83,6 +84,9 @@ func parseConfig(args []string) (config, error) {
 				remaining = remaining[1:]
 			}
 			return parseIPFlags(result, remaining)
+		case "gui":
+			result.Command = commandGUI
+			return parseGUIFlags(result, args[1:])
 		default:
 			id, ok := parseServiceID(args[0])
 			if !ok {
@@ -93,6 +97,29 @@ func parseConfig(args []string) (config, error) {
 		}
 	}
 	return parseMeasureFlags(result, remaining)
+}
+
+func parseGUIFlags(result config, args []string) (config, error) {
+	fs := newFlagSet("gui")
+	fs.BoolVar(&result.Verbose, "verbose", false, "")
+	showHelp := fs.Bool("help", false, "")
+	shortHelp := fs.Bool("h", false, "")
+	showVersion := fs.Bool("version", false, "")
+	if err := fs.Parse(args); err != nil {
+		return config{}, flagUsageError(err)
+	}
+	if *showHelp || *shortHelp {
+		result.Command = commandHelp
+		return result, nil
+	}
+	if *showVersion {
+		result.Command = commandVersion
+		return result, nil
+	}
+	if fs.NArg() != 0 {
+		return config{}, newUsageError(fmt.Sprintf("неизвестный аргумент %q", fs.Arg(0)))
+	}
+	return result, nil
 }
 
 func parseIPFlags(result config, args []string) (config, error) {

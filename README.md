@@ -2,18 +2,15 @@
 
 # Puls
 
-**Проверка скорости и качества интернета из терминала**
-
-Яндекс.Интернетометр · speedtest.ru · Linux · macOS · Windows
+**Проверка скорости интернета в приложении и терминале**
 
 [![CI](https://github.com/Cheviiot/Puls/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheviiot/Puls/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/Go-1.26.7%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
 </div>
 
-Puls измеряет задержку, скачивание и отдачу через публичные протоколы
-официальных веб-клиентов.
+Puls измеряет задержку, загрузку и отдачу через Яндекс.Интернетометр и
+speedtest.ru. Доступны единый GUI для компьютера и Android, а также CLI.
 
 ## Установка
 
@@ -29,9 +26,21 @@ Windows PowerShell:
 irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 ```
 
-Установщик проверяет SHA-256 и настраивает пользовательский `PATH`.
+Установщик добавляет `puls` в `PATH` и создаёт ярлык приложения. Android APK
+доступен в [последнем релизе](https://github.com/Cheviiot/Puls/releases/latest).
 
-> **Обновление:** повторно выполните команду установки для своей системы.
+> Для обновления повторно выполните ту же команду установки.
+
+## Запуск
+
+```sh
+puls gui                     # графический интерфейс
+puls yandex                  # измерение через Яндекс
+puls speedtest --only ping   # только задержка
+puls all --profile quick     # оба сервиса последовательно
+puls ip                      # внешний IP и интернет-провайдер
+puls help                    # параметры CLI
+```
 
 Удаление:
 
@@ -43,62 +52,8 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 & ([scriptblock]::Create((irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1))) -Uninstall
 ```
 
-## Использование
+Puls не отправляет телеметрию и не сохраняет IP, результаты измерений, JWT или
+browser keys. Проект независимый и распространяется по лицензии [MIT](LICENSE).
 
-```sh
-puls                         # выбрать сервис в терминале
-puls yandex                  # полное измерение через Яндекс
-puls speedtest --only ping   # только задержка
-puls all --profile quick     # оба сервиса последовательно
-puls ip                      # внешний IP и интернет-провайдер
-puls all --json              # машиночитаемый результат
-```
-
-| Параметр | Значение |
-| --- | --- |
-| `--profile` | `quick`, `balanced` или `accurate` |
-| `--duration` | от 3 до 60 секунд |
-| `--connections` | `0` — автоматически, вручную — от 1 до 16 |
-| `--only` | `all`, `ping`, `download` или `upload` |
-| `--server` | сервер измерения для `speedtest` |
-| `--show-ip` | добавить данные подключения |
-| `--json` | вывести JSON |
-| `--verbose` | показать диагностику в `stderr` |
-| `--no-color` | отключить цвет |
-
-Полная справка: `puls help`.
-
-## Сервисы
-
-| Сервис | Ping | Download | Upload | IP | Интернет-провайдер |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| `yandex` | ✓ | ✓ | ✓ | ✓ | — |
-| `speedtest` | ✓ | ✓ | ✓ | ✓ | ✓ |
-
-`puls ip` сначала обращается к speedtest.ru, затем к Яндексу. Ошибка одного
-сервиса не останавливает `puls all`.
-
-## Важно
-
-- Puls не отправляет телеметрию и не записывает IP, browser key или JWT на диск.
-- Одна фаза расходует примерно `скорость × длительность ÷ 8` данных.
-- Проект независимый и не связан с Яндексом или speedtest.ru.
-
-Методики основаны на [Яндекс.Интернетометре](https://yandex.ru/support2/internet/ru/measure)
-и [speedtest.ru](https://speedtest.ru/manual). Инженерные подробности:
-[архитектура](docs/architecture.md), [сборка и выпуск](docs/distribution.md),
-[инструкции для AI-разработчиков](AGENTS.md).
-
-## Разработка
-
-```sh
-go test ./...
-go test -race ./...
-go vet ./...
-```
-
-Участие в проекте: [CONTRIBUTING.md](.github/CONTRIBUTING.md).
-
-## Лицензия
-
-[MIT](LICENSE)
+Разработка: [CONTRIBUTING](.github/CONTRIBUTING.md) ·
+[архитектура](docs/architecture.md) · [выпуск](docs/distribution.md)

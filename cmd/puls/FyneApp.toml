@@ -1,0 +1,18 @@
+Website = "https://github.com/Cheviiot/Puls"
+
+[Details]
+Icon = "../../internal/gui/assets/Icon.png"
+Name = "Puls"
+ID = "io.github.cheviiot.puls"
+Version = "0.3.0"
+Build = 3000
+
+[LinuxAndBSD]
+GenericName = "Проверка скорости интернета"
+Categories = ["Network", "Utility"]
+Comment = "Измерение задержки, загрузки и отдачи"
+Keywords = ["internet", "speed", "network", "ping"]
+ExecParams = "gui"
+
+[Migrations]
+fyneDo = true

@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
+	"time"
 
+	appcore "github.com/Cheviiot/Puls/internal/application"
 	"github.com/Cheviiot/Puls/internal/service"
 	"github.com/Cheviiot/Puls/internal/ui"
 )
@@ -27,19 +30,9 @@ func TestHelpUsesServiceTerminologyAndEnglishFlags(t *testing.T) {
 
 func TestHumanMeasurementIsCompactAndUnframed(t *testing.T) {
 	var output bytes.Buffer
-	result := runMeasurement(
-		t.Context(),
-		&fakeBackend{id: service.Yandex},
-		&output,
-		ui.NewStyle(false),
-		false,
-		0,
-		service.MeasurementConfig{Duration: 10, MaxConnections: 16},
-		phaseAll,
-		nil,
-	)
-	if result.Status != service.StatusOK {
-		t.Fatalf("result = %+v", result)
+	app := testApplication(&output, &bytes.Buffer{}, &fakeBackend{id: service.Yandex}, &fakeBackend{id: service.Speedtest})
+	if code := app.Run(context.Background(), []string{"yandex"}); code != 0 {
+		t.Fatalf("Run() = %d", code)
 	}
 	text := output.String()
 	for _, expected := range []string{"Puls · Яндекс.Интернетометр", "Сервер", "Задержка", "Загрузка", "Отдача", "готово"} {
@@ -54,10 +47,10 @@ func TestHumanMeasurementIsCompactAndUnframed(t *testing.T) {
 
 func TestGoldenHumanYandex(t *testing.T) {
 	var output bytes.Buffer
-	runMeasurement(
-		t.Context(), &fakeBackend{id: service.Yandex}, &output, ui.NewStyle(false),
-		false, 0, service.MeasurementConfig{Duration: 10, MaxConnections: 16}, phaseAll, nil,
-	)
+	app := testApplication(&output, &bytes.Buffer{}, &fakeBackend{id: service.Yandex}, &fakeBackend{id: service.Speedtest})
+	if code := app.Run(context.Background(), []string{"yandex"}); code != 0 {
+		t.Fatalf("Run() = %d", code)
+	}
 	want := "Puls · Яндекс.Интернетометр\n" +
 		"  Сервер                mock.example · Владивосток\n" +
 		"  Задержка              11.0 мс  ·  джиттер 1.5 мс\n" +
@@ -70,24 +63,25 @@ func TestGoldenHumanYandex(t *testing.T) {
 }
 
 func TestTTYProgressIsAdaptiveAndPipeHasOnlyFinalLine(t *testing.T) {
-	cfg := service.MeasurementConfig{Duration: 10}
-	run := func(progress func(service.ThroughputProgress)) (service.ThroughputResult, error) {
-		if progress != nil {
-			progress(service.ThroughputProgress{Mbps: 80, Elapsed: 5})
-		}
-		return service.ThroughputResult{Mbps: 80}, nil
-	}
 	var terminal bytes.Buffer
-	_, _ = measureThroughput(t.Context(), &terminal, ui.NewStyle(false), true, 10, "Загрузка", cfg, run)
+	terminalRenderer := newTerminalObserver(&terminal, ui.NewStyle(false), true, 10, 10*time.Second)
+	terminalRenderer.Observe(appcore.RunEvent{Kind: appcore.EventPhaseStarted, Phase: service.PhaseDownload})
+	terminalRenderer.Observe(appcore.RunEvent{Kind: appcore.EventThroughputProgress, Phase: service.PhaseDownload, Throughput: &service.ThroughputProgress{Mbps: 80, Elapsed: 5 * time.Second}})
+	terminalRenderer.Observe(appcore.RunEvent{Kind: appcore.EventPhaseCompleted, Phase: service.PhaseDownload, PhaseResult: &appcore.PhaseResult{Status: service.StatusOK, Mbps: floatPointer(80)}})
 	if !strings.Contains(terminal.String(), "[█████░░░░░]") || !strings.Contains(terminal.String(), "\r\x1b[K") {
 		t.Fatalf("TTY progress = %q", terminal.String())
 	}
 	var pipe bytes.Buffer
-	_, _ = measureThroughput(t.Context(), &pipe, ui.NewStyle(false), false, 0, "Загрузка", cfg, run)
+	pipeRenderer := newTerminalObserver(&pipe, ui.NewStyle(false), false, 0, 10*time.Second)
+	pipeRenderer.Observe(appcore.RunEvent{Kind: appcore.EventPhaseStarted, Phase: service.PhaseDownload})
+	pipeRenderer.Observe(appcore.RunEvent{Kind: appcore.EventThroughputProgress, Phase: service.PhaseDownload, Throughput: &service.ThroughputProgress{Mbps: 80, Elapsed: 5 * time.Second}})
+	pipeRenderer.Observe(appcore.RunEvent{Kind: appcore.EventPhaseCompleted, Phase: service.PhaseDownload, PhaseResult: &appcore.PhaseResult{Status: service.StatusOK, Mbps: floatPointer(80)}})
 	if strings.Count(pipe.String(), "\n") != 1 || strings.Contains(pipe.String(), "[") {
 		t.Fatalf("pipe output = %q", pipe.String())
 	}
 }
+
+func floatPointer(value float64) *float64 { return &value }
 
 func TestFormatServer(t *testing.T) {
 	got := formatServer(service.Server{Name: "host", City: "Москва", Region: "Москва"})

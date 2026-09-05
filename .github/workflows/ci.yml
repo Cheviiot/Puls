@@ -16,41 +16,36 @@ concurrency:
 jobs:
   checks:
     name: Тесты и статический анализ
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Получение исходного кода
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Установка Go
+      - name: Install Fyne system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev shellcheck
+      - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - name: Проверка модулей
-        run: go mod verify
-
-      - name: Проверка форматирования
-        run: test -z "$(gofmt -l .)"
-
-      - name: Проверка GitHub Actions
+      - name: Verify modules and formatting
+        run: |
+          go mod verify
+          test -z "$(gofmt -l .)"
+      - name: Validate GitHub Actions
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
-
-      - name: Проверка установщиков
-        shell: bash
+      - name: Validate installers
         run: |
           shellcheck scripts/install.sh
           pwsh -NoProfile -File ./scripts/install.ps1 -Help
-
-      - name: Модульные тесты с детектором гонок
+      - name: Test with race detector
         run: go test -race -count=1 ./...
-
       - name: Go Vet
         run: go vet ./...
-
       - name: Staticcheck
         uses: dominikh/staticcheck-action@672a31696676d1592844bf0164b3bbfd855a4d50 # v1.4.1
         with:
@@ -59,76 +54,76 @@ jobs:
 
   vulnerabilities:
     name: Проверка уязвимостей
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Fyne system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
       - name: Govulncheck
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
+          repo-checkout: false
+          go-version-input: ""
           go-version-file: go.mod
           go-package: ./...
 
   windows-installer:
     name: Установщик Windows
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 10
     steps:
-      - name: Получение исходного кода
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Установка Go
+      - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - name: Integration test установщика
+      - name: Test installer
         shell: pwsh
         run: go test -count=1 -run '^TestPowerShellInstaller' ./cmd/release
 
   macos-installer:
     name: Установщик macOS
-    runs-on: macos-latest
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
-      - name: Получение исходного кода
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Установка Go
+      - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - name: Integration test установщика
+      - name: Test installer
         run: go test -count=1 -run '^TestShellInstaller' ./cmd/release
 
   package:
     name: Кроссплатформенные архивы
     needs: [checks, vulnerabilities, windows-installer, macos-installer]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - name: Получение исходного кода
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: Установка Go
+      - name: Install Fyne system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+      - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - name: Сборка архивов
-        run: go run ./cmd/release --version "dev-${GITHUB_SHA::12}"
-
-      - name: Проверка контрольных сумм
-        working-directory: dist
-        run: sha256sum -c SHA256SUMS.txt
-
-      - name: Сохранение архивов
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: Puls-${{ github.sha }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 7
+      - name: Build CLI-only matrix
+        run: go run ./cmd/release --mode cli --version "dev-${GITHUB_SHA::12}" --output dist-cli
+      - name: Build Linux GUI archive
+        run: go run ./cmd/release --mode gui --targets linux/amd64 --version "dev-${GITHUB_SHA::12}" --output dist-gui
+      - name: Verify checksums
+        run: |
+          cd dist-cli && sha256sum -c SHA256SUMS.txt
+          cd ../dist-gui && sha256sum -c SHA256SUMS.txt

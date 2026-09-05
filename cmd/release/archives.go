@@ -17,12 +17,29 @@ type archiveFile struct {
 	Mode os.FileMode
 }
 
-func releaseArchiveFiles(root, directory, binaryName, binaryPath string) ([]archiveFile, error) {
+func releaseArchiveFiles(root, directory, binaryName, binaryPath string, includeGUIAssets bool) ([]archiveFile, error) {
 	files := []archiveFile{{
 		Name: filepath.ToSlash(filepath.Join(directory, binaryName)),
 		Path: binaryPath,
 		Mode: 0o755,
 	}}
+	if includeGUIAssets {
+		for _, asset := range []string{"internal/gui/assets/Icon.png", "internal/gui/assets/Icon.svg", "internal/gui/assets/Icon.ico"} {
+			path := filepath.Join(root, filepath.FromSlash(asset))
+			info, err := os.Stat(path)
+			if err != nil {
+				return nil, fmt.Errorf("проверка GUI-ресурса %s: %w", asset, err)
+			}
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("GUI-ресурс %s не является обычным файлом", asset)
+			}
+			files = append(files, archiveFile{
+				Name: filepath.ToSlash(filepath.Join(directory, "assets", filepath.Base(asset))),
+				Path: path,
+				Mode: 0o644,
+			})
+		}
+	}
 	for _, document := range releaseDocuments {
 		path := filepath.Join(root, filepath.FromSlash(document))
 		info, err := os.Stat(path)
