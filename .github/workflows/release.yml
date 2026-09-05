@@ -166,6 +166,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Install bundletool
+        env:
+          BUNDLETOOL_VERSION: 1.18.3
+          BUNDLETOOL_SHA256: a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
+        run: |
+          bundletool_jar="$RUNNER_TEMP/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          bundletool_bin="$RUNNER_TEMP/bundletool-bin"
+          curl --fail-with-body --location --silent --show-error \
+            --output "$bundletool_jar" \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          printf '%s  %s\n' "$BUNDLETOOL_SHA256" "$bundletool_jar" | sha256sum --check --strict
+          mkdir -p "$bundletool_bin"
+          printf '#!/usr/bin/env bash\nexec java -jar "%s" "$@"\n' "$bundletool_jar" > "$bundletool_bin/bundletool"
+          chmod 0755 "$bundletool_bin/bundletool"
+          "$bundletool_bin/bundletool" version
+          echo "$bundletool_bin" >> "$GITHUB_PATH"
       - name: Restore signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}
