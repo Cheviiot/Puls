@@ -52,7 +52,7 @@ func TestParseTargets(t *testing.T) {
 }
 
 func TestBuildEnvironmentReplacesTargetVariables(t *testing.T) {
-	environment := buildEnvironment([]string{"PATH=/bin", "GOOS=old", "GOARCH=old", "CGO_ENABLED=1"}, target{OS: "linux", Arch: "arm64"})
+	environment := buildEnvironment([]string{"PATH=/bin", "GOOS=old", "GOARCH=old", "CGO_ENABLED=1"}, target{OS: "linux", Arch: "arm64"}, buildModeCLI)
 	joined := strings.Join(environment, "\n")
 	for _, want := range []string{"PATH=/bin", "GOOS=linux", "GOARCH=arm64", "CGO_ENABLED=0"} {
 		if !strings.Contains(joined, want) {
@@ -63,6 +63,16 @@ func TestBuildEnvironmentReplacesTargetVariables(t *testing.T) {
 		if strings.Contains(joined, unwanted) {
 			t.Errorf("environment still contains %q: %v", unwanted, environment)
 		}
+	}
+}
+
+func TestGUIBuildEnvironmentEnablesCGO(t *testing.T) {
+	environment := buildEnvironment(nil, target{OS: "linux", Arch: "amd64"}, buildModeGUI)
+	if !strings.Contains(strings.Join(environment, "\n"), "CGO_ENABLED=1") {
+		t.Fatalf("GUI environment = %v", environment)
+	}
+	if err := validateBuildTarget(buildModeGUI, target{OS: "windows", Arch: "arm64"}); err == nil {
+		t.Fatal("windows/arm64 GUI target was accepted")
 	}
 }
 
@@ -82,7 +92,7 @@ func TestReleaseArchiveFilesIncludePublicDocumentation(t *testing.T) {
 		}
 	}
 
-	files, err := releaseArchiveFiles(root, "Puls_test", "puls", binary)
+	files, err := releaseArchiveFiles(root, "Puls_test", "puls", binary, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +110,58 @@ func TestReleaseArchiveFilesIncludePublicDocumentation(t *testing.T) {
 	if err := os.Remove(missing); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := releaseArchiveFiles(root, "Puls_test", "puls", binary); err == nil {
+	if _, err := releaseArchiveFiles(root, "Puls_test", "puls", binary, false); err == nil {
 		t.Fatal("releaseArchiveFiles accepted missing public documentation")
+	}
+}
+
+func TestGUIArchiveIncludesApplicationIcons(t *testing.T) {
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "puls")
+	if err := os.WriteFile(binary, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files, err := releaseArchiveFiles(root, "Puls_test", "puls", binary, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make(map[string]bool, len(files))
+	for _, file := range files {
+		names[file.Name] = true
+	}
+	for _, name := range []string{"Puls_test/assets/Icon.png", "Puls_test/assets/Icon.svg", "Puls_test/assets/Icon.ico"} {
+		if !names[name] {
+			t.Errorf("GUI archive is missing %s", name)
+		}
+	}
+}
+
+func TestCollectReleaseArtifactsMarksCapabilitiesAndAndroid(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{
+		"Puls_0.3.0_linux_amd64.tar.gz",
+		"Puls_0.3.0_windows_arm64.zip",
+		"Puls_0.3.0_android.apk",
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	artifacts, err := collectReleaseArtifacts(directory, "0.3.0", []target{{OS: "linux", Arch: "amd64"}, {OS: "windows", Arch: "arm64"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 3 {
+		t.Fatalf("artifacts = %+v", artifacts)
+	}
+	if strings.Join(artifacts[0].Capabilities, ",") != "cli,gui" || strings.Join(artifacts[1].Capabilities, ",") != "cli" {
+		t.Fatalf("desktop capabilities = %+v", artifacts)
+	}
+	if artifacts[2].Target != (target{OS: "android", Arch: "universal"}) || artifacts[2].Kind != "apk" {
+		t.Fatalf("android artifact = %+v", artifacts[2])
 	}
 }
 
@@ -236,8 +296,8 @@ func TestReleaseManifestIsDeterministicAndChecksummed(t *testing.T) {
 	linuxDigest := sha256.Sum256([]byte("linux archive"))
 	windowsDigest := sha256.Sum256([]byte("windows archive"))
 	artifacts := []artifact{
-		{Name: "Puls_1.2.3_windows_arm64.zip", Digest: windowsDigest, Target: target{OS: "windows", Arch: "arm64"}},
-		{Name: "Puls_1.2.3_linux_amd64.tar.gz", Digest: linuxDigest, Target: target{OS: "linux", Arch: "amd64"}},
+		{Name: "Puls_1.2.3_windows_arm64.zip", Digest: windowsDigest, Target: target{OS: "windows", Arch: "arm64"}, Kind: "archive", Capabilities: []string{"cli"}},
+		{Name: "Puls_1.2.3_linux_amd64.tar.gz", Digest: linuxDigest, Target: target{OS: "linux", Arch: "amd64"}, Kind: "archive", Capabilities: []string{"cli", "gui"}},
 	}
 
 	manifestArtifact, err := writeReleaseManifest(directory, "1.2.3", artifacts)
@@ -263,7 +323,7 @@ func TestReleaseManifestIsDeterministicAndChecksummed(t *testing.T) {
 	if err := json.Unmarshal(first, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest.SchemaVersion != 1 || manifest.Product != "Puls" || manifest.Version != "1.2.3" {
+	if manifest.SchemaVersion != 2 || manifest.Product != "Puls" || manifest.Version != "1.2.3" {
 		t.Fatalf("manifest metadata = %+v", manifest)
 	}
 	if len(manifest.Assets) != 2 || manifest.Assets[0].OS != "linux" || manifest.Assets[1].OS != "windows" {
@@ -271,6 +331,9 @@ func TestReleaseManifestIsDeterministicAndChecksummed(t *testing.T) {
 	}
 	if manifest.Assets[0].SHA256 != fmt.Sprintf("%x", linuxDigest) {
 		t.Fatalf("linux digest = %q", manifest.Assets[0].SHA256)
+	}
+	if manifest.Assets[0].Kind != "archive" || strings.Join(manifest.Assets[0].Capabilities, ",") != "cli,gui" {
+		t.Fatalf("linux capabilities = %+v", manifest.Assets[0])
 	}
 
 	checksummed := append(append([]artifact(nil), artifacts...), manifestArtifact)

@@ -2,8 +2,7 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
 permissions:
   contents: write
@@ -16,83 +15,244 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Публикация релиза
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  validate:
+    name: Validate release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      build: ${{ steps.version.outputs.build }}
     steps:
-      - name: Получение исходного кода
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-
-      - name: Установка Go
+      - name: Validate tag
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Релизный тег должен иметь вид v1.2.3" >&2
+            exit 1
+          fi
+          version=${GITHUB_REF_NAME#v}
+          IFS=. read -r major minor patch <<< "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$((major * 1000000 + minor * 1000 + patch))" >> "$GITHUB_OUTPUT"
+      - name: Install Fyne system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev shellcheck
+      - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - name: Проверка тега
-        id: version
-        shell: bash
+      - name: Verify sources
         run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo "Тег должен иметь вид v1.2.3 или v1.2.3-rc.1" >&2
-            exit 1
-          fi
-          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Проверка модулей
-        run: go mod verify
-
-      - name: Проверка форматирования
-        run: test -z "$(gofmt -l .)"
-
-      - name: Проверка GitHub Actions
+          go mod verify
+          test -z "$(gofmt -l .)"
+          shellcheck scripts/install.sh
+          pwsh -NoProfile -File ./scripts/install.ps1 -Help
+      - name: Validate workflows
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
-
-      - name: Проверка установщиков
-        shell: bash
-        run: |
-          shellcheck scripts/install.sh
-          pwsh -NoProfile -File ./scripts/install.ps1 -Help
-
-      - name: Десятикратный прогон модульных тестов
+      - name: Repeat tests
         run: go test -count=10 ./...
-
-      - name: Модульные тесты с детектором гонок
+      - name: Test with race detector
         run: go test -race -count=1 ./...
-
       - name: Go Vet
         run: go vet ./...
-
       - name: Staticcheck
         uses: dominikh/staticcheck-action@672a31696676d1592844bf0164b3bbfd855a4d50 # v1.4.1
         with:
           version: "2026.1"
           install-go: false
-
-      - name: Проверка уязвимостей
+      - name: Vulnerability scan
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
+          repo-checkout: false
+          go-version-input: ""
           go-version-file: go.mod
           go-package: ./...
 
-      - name: Сборка релизных архивов
-        run: go run ./cmd/release --version "${{ steps.version.outputs.value }}"
+  desktop:
+    name: ${{ matrix.os }}/${{ matrix.arch }} GUI
+    needs: validate
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, os: linux, arch: amd64}
+          - {runner: ubuntu-24.04-arm, os: linux, arch: arm64}
+          - {runner: windows-2025, os: windows, arch: amd64}
+          - {runner: macos-15-intel, os: darwin, arch: amd64}
+          - {runner: macos-15, os: darwin, arch: arm64}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Linux dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+      - name: Verify MinGW
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command gcc.exe -ErrorAction SilentlyContinue)) {
+            throw "MinGW gcc.exe is unavailable on this runner"
+          }
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build native archive
+        shell: bash
+        run: >-
+          go run ./cmd/release --mode gui
+          --targets "${{ matrix.os }}/${{ matrix.arch }}"
+          --version "${{ needs.validate.outputs.version }}"
+          --output dist
+      - name: Upload native archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 3
 
-      - name: Проверка контрольных сумм
+  windows-arm64:
+    name: windows/arm64 CLI
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build CLI archive
+        run: >-
+          go run ./cmd/release --mode cli --targets windows/arm64
+          --version "${{ needs.validate.outputs.version }}" --output dist
+      - name: Upload CLI archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-windows-arm64
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 3
+
+  android:
+    name: Signed Android APK
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Restore signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/puls-release.keystore"
+      - name: Build and sign APK
+        working-directory: cmd/puls
+        env:
+          KEYSTORE_PASS: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PULS_ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.PULS_ANDROID_KEY_PASSWORD }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          RELEASE_BUILD: ${{ needs.validate.outputs.build }}
+          GOFLAGS: -ldflags=-X=main.version=${{ needs.validate.outputs.version }}
+        run: |
+          test -n "$KEYSTORE_PASS" && test -n "$KEY_ALIAS" && test -n "$KEY_PASS"
+          go run fyne.io/tools/cmd/fyne@v1.7.2 release \
+            --target android --app-version "$RELEASE_VERSION" --app-build "$RELEASE_BUILD" \
+            --tags migrated_fynedo \
+            --keystore "$RUNNER_TEMP/puls-release.keystore" --keystore-pass "$KEYSTORE_PASS" \
+            --key-name "$KEY_ALIAS" --key-pass "$KEY_PASS"
+      - name: Verify signature and permissions
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          apk=$(find cmd/puls -maxdepth 1 -type f -name '*.apk' -print -quit)
+          test -n "$apk"
+          apksigner=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -1)
+          apkanalyzer="$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer"
+          test -x "$apksigner" && test -x "$apkanalyzer"
+          "$apksigner" verify --verbose --print-certs "$apk"
+          permissions=$("$apkanalyzer" manifest permissions "$apk")
+          printf '%s\n' "$permissions"
+          grep -Fq 'android.permission.INTERNET' <<< "$permissions"
+          if grep -Eq 'ACCESS_(FINE|COARSE)_LOCATION|READ_PHONE_STATE|READ_CONTACTS|RECORD_AUDIO|CAMERA' <<< "$permissions"; then
+            echo "APK запрашивает лишние чувствительные разрешения" >&2
+            exit 1
+          fi
+          mkdir -p dist
+          mv "$apk" "dist/Puls_${RELEASE_VERSION}_android.apk"
+      - name: Upload APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    name: Publish GitHub Release
+    needs: [validate, desktop, windows-arm64, android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v8.0.1
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+      - name: Download Android APK
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v8.0.1
+        with:
+          name: android-apk
+          path: dist
+      - name: Assemble release metadata
+        run: >-
+          go run ./cmd/release --assemble
+          --version "${{ needs.validate.outputs.version }}" --output dist
+      - name: Verify checksums
         working-directory: dist
         run: sha256sum -c SHA256SUMS.txt
-
-      - name: Аттестация происхождения артефактов
+      - name: Attest artifacts
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: dist/SHA256SUMS.txt
-
-      - name: Создание и загрузка черновика GitHub Release
+      - name: Create and upload draft
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -106,25 +266,13 @@ jobs:
             exit "$status"
           }
           trap cleanup_failed_release EXIT
-
-          release_options=()
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
-            release_options+=(--prerelease)
-          fi
-          gh release create "$GITHUB_REF_NAME" \
-            --draft \
-            --verify-tag \
-            --generate-notes \
-            --title "Puls $GITHUB_REF_NAME" \
-            "${release_options[@]}"
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "Puls $GITHUB_REF_NAME"
           release_created=1
-
           for asset_path in dist/*; do
             if [[ "${asset_path##*/}" != "install.ps1" ]]; then
               gh release upload "$GITHUB_REF_NAME" "$asset_path"
             fi
           done
-
           release_id=$(gh release view "$GITHUB_REF_NAME" --json databaseId --jq .databaseId)
           curl --fail-with-body --silent --show-error \
             --request POST \
@@ -135,7 +283,6 @@ jobs:
             --data-binary @dist/install.ps1 \
             "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=install.ps1" \
             > /dev/null
-
           content_type=$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
             --jq 'map(select(.name == "install.ps1")) | if length == 1 then .[0].content_type else "" end')
           if [[ "$content_type" != "text/plain; charset=utf-8" ]]; then
@@ -143,8 +290,7 @@ jobs:
             exit 1
           fi
           trap - EXIT
-
-      - name: Публикация GitHub Release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$GITHUB_REF_NAME" --draft=false

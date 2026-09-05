@@ -19,13 +19,6 @@ var releaseDocuments = []string{
 	"README.md",
 	"CHANGELOG.md",
 	"LICENSE",
-	".github/CONTRIBUTING.md",
-	".github/SECURITY.md",
-	".github/SUPPORT.md",
-	".github/CODE_OF_CONDUCT.md",
-	"AGENTS.md",
-	"docs/architecture.md",
-	"docs/distribution.md",
 }
 
 var releaseInstallers = []struct {
@@ -50,6 +43,8 @@ func run(args []string) error {
 	version := fs.String("version", "dev", "версия в бинарных файлах и именах архивов")
 	output := fs.String("output", "dist", "каталог для готовых релизных файлов")
 	targetList := fs.String("targets", defaultTargets, "список целей через запятую в формате система/архитектура")
+	modeText := fs.String("mode", string(buildModeCLI), "тип бинарного файла: cli или gui")
+	assemble := fs.Bool("assemble", false, "собрать manifest и checksums из готовых архивов")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Сборка Puls для нескольких операционных систем")
 		fmt.Fprintln(fs.Output())
@@ -61,6 +56,8 @@ func run(args []string) error {
 		fmt.Fprintln(fs.Output(), "  --version <value>   версия Puls · по умолчанию dev")
 		fmt.Fprintln(fs.Output(), "  --output <path>     каталог релизных файлов · по умолчанию dist")
 		fmt.Fprintln(fs.Output(), "  --targets <list>    пары система/архитектура через запятую")
+		fmt.Fprintln(fs.Output(), "  --mode <cli|gui>    CLI-only или нативная GUI-сборка")
+		fmt.Fprintln(fs.Output(), "  --assemble          объединить готовые платформенные архивы")
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -76,6 +73,10 @@ func run(args []string) error {
 	}
 	if strings.TrimSpace(*output) == "" {
 		return errors.New("каталог результатов не может быть пустым")
+	}
+	mode, err := parseBuildMode(*modeText)
+	if err != nil {
+		return err
 	}
 
 	root, err := findProjectRoot()
@@ -104,13 +105,21 @@ func run(args []string) error {
 	}
 	defer os.RemoveAll(workDir)
 
-	artifacts := make([]artifact, 0, len(targets))
-	for _, buildTarget := range targets {
-		built, buildErr := build(root, outputDir, workDir, *version, buildTarget)
-		if buildErr != nil {
-			return buildErr
+	var artifacts []artifact
+	if *assemble {
+		artifacts, err = collectReleaseArtifacts(outputDir, *version, targets)
+		if err != nil {
+			return err
 		}
-		artifacts = append(artifacts, built)
+	} else {
+		artifacts = make([]artifact, 0, len(targets))
+		for _, buildTarget := range targets {
+			built, buildErr := build(root, outputDir, workDir, *version, buildTarget, mode)
+			if buildErr != nil {
+				return buildErr
+			}
+			artifacts = append(artifacts, built)
+		}
 	}
 	manifestArtifact, err := writeReleaseManifest(outputDir, *version, artifacts)
 	if err != nil {
@@ -129,6 +138,41 @@ func run(args []string) error {
 	}
 	fmt.Printf("Готово: %d архивов в %s\n", len(artifacts), outputDir)
 	return nil
+}
+
+func collectReleaseArtifacts(outputDir, version string, targets []target) ([]artifact, error) {
+	result := make([]artifact, 0, len(targets)+1)
+	for _, buildTarget := range targets {
+		extension := ".tar.gz"
+		if buildTarget.OS == "windows" {
+			extension = ".zip"
+		}
+		name := fmt.Sprintf("Puls_%s_%s_%s%s", version, buildTarget.OS, buildTarget.Arch, extension)
+		digest, err := fileDigest(filepath.Join(outputDir, name))
+		if err != nil {
+			return nil, fmt.Errorf("готовый архив %s: %w", name, err)
+		}
+		mode := buildModeGUI
+		if buildTarget.OS == "windows" && buildTarget.Arch == "arm64" {
+			mode = buildModeCLI
+		}
+		result = append(result, artifact{Name: name, Digest: digest, Target: buildTarget, Kind: "archive", Capabilities: capabilitiesFor(mode)})
+	}
+	androidName := fmt.Sprintf("Puls_%s_android.apk", version)
+	androidPath := filepath.Join(outputDir, androidName)
+	if _, err := os.Stat(androidPath); err == nil {
+		digest, digestErr := fileDigest(androidPath)
+		if digestErr != nil {
+			return nil, digestErr
+		}
+		result = append(result, artifact{
+			Name: androidName, Digest: digest, Target: target{OS: "android", Arch: "universal"},
+			Kind: "apk", Capabilities: []string{"gui"},
+		})
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return result, nil
 }
 
 func safeVersion(value string) bool {

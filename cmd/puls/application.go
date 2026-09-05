@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 
+	appcore "github.com/Cheviiot/Puls/internal/application"
+	"github.com/Cheviiot/Puls/internal/gui"
 	"github.com/Cheviiot/Puls/internal/service"
 	"github.com/Cheviiot/Puls/internal/service/speedtestru"
 	"github.com/Cheviiot/Puls/internal/service/yandex"
@@ -26,6 +28,7 @@ type application struct {
 	yandexFactory    backendFactory
 	speedtestFactory func(string, service.LogFunc) service.Backend
 	selectService    func(*ui.Style) (service.ServiceID, error)
+	launchGUI        func(context.Context, gui.Options) error
 }
 
 func newApplication(in *os.File, stdout, stderr io.Writer) *application {
@@ -37,6 +40,7 @@ func newApplication(in *os.File, stdout, stderr io.Writer) *application {
 		yandexFactory: func(log service.LogFunc) service.Backend {
 			return yandex.New(yandex.Options{Log: log})
 		},
+		launchGUI: gui.Run,
 		speedtestFactory: func(server string, log service.LogFunc) service.Backend {
 			return speedtestru.New(speedtestru.Options{Server: server, Log: log})
 		},
@@ -71,6 +75,17 @@ func (app *application) Run(ctx context.Context, args []string) int {
 	}
 
 	log := app.logger(cfg.Verbose, cfg.NoColor)
+	if cfg.Command == commandGUI {
+		err := app.launchGUI(ctx, gui.Options{Version: version, Log: log})
+		if err == nil {
+			return 0
+		}
+		fmt.Fprintf(app.stderr, "ошибка запуска GUI: %v\n", err)
+		if errors.Is(err, gui.ErrUnavailable) {
+			return 2
+		}
+		return 1
+	}
 	if cfg.Command == commandMeasure && cfg.Service == "" {
 		if !cfg.JSON && app.inputTTY && app.outputTTY {
 			selected, selectErr := app.selectService(style)
@@ -96,7 +111,13 @@ func (app *application) Run(ctx context.Context, args []string) int {
 
 func (app *application) runIP(ctx context.Context, cfg config, style *ui.Style, log service.LogFunc) int {
 	result := newEnvelope(commandIP)
-	connection, err := app.detectConnectionWithProgress(ctx, cfg, style, cfg.Service, cfg.ServiceExplicit, log)
+	runner := app.runner(log)
+	var observer appcore.Observer
+	if !cfg.JSON {
+		terminal := newTerminalObserver(app.stdout, style, app.outputTTY, 0, 0)
+		observer = terminal.Observe
+	}
+	connection := runner.DetectConnection(ctx, appcore.ConnectionRequest{Service: cfg.Service, Explicit: cfg.ServiceExplicit}, observer)
 	result.Connection = &connection
 	result.Status = connection.Status
 
@@ -105,54 +126,34 @@ func (app *application) runIP(ctx context.Context, cfg config, style *ui.Style, 
 			fmt.Fprintf(app.stderr, "ошибка записи JSON: %v\n", writeErr)
 			return 1
 		}
-	} else {
-		renderConnection(app.stdout, style, connection)
 	}
-	if errors.Is(err, context.Canceled) || result.Status == service.StatusCanceled {
+	if result.Status == service.StatusCanceled {
 		return 130
 	}
-	if err != nil {
+	if result.Status != service.StatusOK {
 		return 1
 	}
 	return 0
 }
 
 func (app *application) runMeasurements(ctx context.Context, cfg config, style *ui.Style, log service.LogFunc) int {
-	result := newEnvelope(commandMeasure)
-	if cfg.ShowIP {
-		connectionService := cfg.Service
-		explicit := true
-		if cfg.Service == service.All {
-			connectionService, explicit = "", false
-		}
-		connection, _ := app.detectConnectionWithProgress(ctx, cfg, style, connectionService, explicit, log)
-		result.Connection = &connection
-		if !cfg.JSON {
-			renderConnection(app.stdout, style, connection)
-		}
+	runner := app.runner(log)
+	var observer appcore.Observer
+	if !cfg.JSON {
+		terminal := newTerminalObserver(app.stdout, style, app.outputTTY, ui.ProgressWidth(app.stdoutFile), cfg.Duration)
+		observer = terminal.Observe
 	}
-
-	backends := app.backends(cfg, log)
-	output := app.stdout
-	if cfg.JSON {
-		output = io.Discard
-	}
-	measurementConfig := service.MeasurementConfig{
-		Duration: cfg.Duration, Connections: cfg.Connections, MaxConnections: 16,
-	}
-	for _, backend := range backends {
-		measured := runMeasurement(ctx, backend, output, style, app.outputTTY && !cfg.JSON, ui.ProgressWidth(app.stdoutFile), measurementConfig, cfg.Only, log)
-		result.Results = append(result.Results, measured)
-		if ctx.Err() != nil {
-			break
-		}
-	}
-	result.Status = aggregateStatus(result.Results)
-	if errors.Is(ctx.Err(), context.Canceled) {
-		result.Status = service.StatusCanceled
-	}
+	result := runner.Measure(ctx, appcore.MeasureRequest{
+		Service:        cfg.Service,
+		Profile:        appcore.Profile(cfg.Profile),
+		Duration:       cfg.Duration,
+		Connections:    cfg.Connections,
+		Only:           appcore.PhaseSelection(cfg.Only),
+		Server:         cfg.Server,
+		ShowConnection: cfg.ShowIP,
+	}, observer)
 	if !cfg.JSON && len(result.Results) > 1 {
-		renderSummary(output, style, result.Results)
+		renderSummary(app.stdout, style, result.Results)
 	}
 	if cfg.JSON {
 		if writeErr := writeJSON(app.stdout, result); writeErr != nil {
@@ -170,15 +171,16 @@ func (app *application) runMeasurements(ctx context.Context, cfg config, style *
 	return 0
 }
 
-func (app *application) backends(cfg config, log service.LogFunc) []service.Backend {
-	switch cfg.Service {
-	case service.Speedtest:
-		return []service.Backend{app.speedtestFactory(cfg.Server, log)}
-	case service.All:
-		return []service.Backend{app.yandexFactory(log), app.speedtestFactory("", log)}
-	default:
-		return []service.Backend{app.yandexFactory(log)}
-	}
+func (app *application) runner(log service.LogFunc) *appcore.Runner {
+	return appcore.NewRunner(appcore.Options{
+		Log: log,
+		YandexFactory: func(_ string, log service.LogFunc) service.Backend {
+			return app.yandexFactory(log)
+		},
+		SpeedtestFactory: func(server string, log service.LogFunc) service.Backend {
+			return app.speedtestFactory(server, log)
+		},
+	})
 }
 
 func (app *application) logger(enabled, noColor bool) service.LogFunc {
