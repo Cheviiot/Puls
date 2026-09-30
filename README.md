@@ -52,6 +52,23 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 & ([scriptblock]::Create((irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1))) -Uninstall
 ```
 
+## Сборка из исходников
+
+Puls переносится на C++20. Новая версия CLI собирается CMake и
+[vcpkg](https://github.com/microsoft/vcpkg):
+
+```sh
+export VCPKG_ROOT=~/vcpkg
+cmake --preset release
+cmake --build --preset release
+ctest --preset release
+./build/release/src/puls help
+```
+
+На Windows используйте preset `windows-release` в Developer PowerShell для
+Visual Studio. GUI и Android пока собираются из Go-версии; подробности — в
+[CONTRIBUTING](.github/CONTRIBUTING.md).
+
 Puls не отправляет телеметрию и не сохраняет IP, результаты измерений, JWT или
 browser keys. Проект независимый и распространяется по лицензии [MIT](LICENSE).
 

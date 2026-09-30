@@ -4,6 +4,9 @@
 
 ## Как проверено
 
+- [ ] `ctest --preset debug --repeat until-fail:10`
+- [ ] `ctest` с presets `sanitize` и `tsan`
+- [ ] `clang-format-18 --dry-run --Werror` для изменённых C++ файлов
 - [ ] `go test ./...`
 - [ ] `go test -race ./...`
 - [ ] `go vet ./...`

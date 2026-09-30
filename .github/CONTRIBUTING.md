@@ -8,6 +8,38 @@
 
 ## Подготовка среды
 
+Puls переносится с Go на C++20. Новая реализация CLI, протоколов и engine
+находится в `src/`; GUI, Android и release builder пока собираются из Go.
+
+### C++
+
+Нужны CMake 3.25+, Ninja, компилятор C++20 (GCC 13+, Clang 18+, Apple Clang
+из Xcode 16+ или MSVC 2022) и [vcpkg](https://github.com/microsoft/vcpkg).
+Зависимости из `vcpkg.json` устанавливаются при первой конфигурации.
+
+```bash
+git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
+~/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+export VCPKG_ROOT=~/vcpkg
+
+cmake --preset debug
+cmake --build --preset debug
+ctest --preset debug
+```
+
+На Windows используйте preset `windows-debug` в Developer PowerShell для
+Visual Studio. Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3 и
+GoogleTest через preset `system-debug`:
+
+```bash
+sudo apt-get install cmake ninja-build g++ libboost-dev libboost-json-dev libssl-dev libgtest-dev
+cmake --preset system-debug
+cmake --build --preset system-debug
+ctest --preset system-debug
+```
+
+### Go
+
 Нужна версия Go, указанная в `go.mod`.
 
 ```bash
@@ -21,6 +53,17 @@ go test ./...
 `puls-fyne-dev`; точные команды приведены в [distribution.md](../docs/distribution.md).
 
 ## Перед pull request
+
+Для C++:
+
+```bash
+git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 -i
+ctest --preset debug --repeat until-fail:10
+cmake --preset sanitize && cmake --build --preset sanitize && ctest --preset sanitize
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
+```
+
+Для Go:
 
 ```bash
 gofmt -w ./cmd ./internal
@@ -51,6 +94,8 @@ shellcheck scripts/install.sh
 Сетевые тесты запускаются отдельно:
 
 ```bash
+cmake --preset debug -DPULS_LIVE_TESTS=ON && cmake --build --preset debug
+ctest --preset debug -R '^Live\.'
 go test -tags=live ./internal/service/...
 PULS_LIVE_THROUGHPUT=1 go test -tags=live -run Live ./internal/service/...
 ```

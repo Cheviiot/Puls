@@ -77,6 +77,34 @@ global output, setter вида `SetVerbose` или UI в `MeasurementConfig`. О
 лимиты и преобразования принадлежат `internal/service`; правила конкретного
 протокола не выноси туда.
 
+## C++ версия
+
+Проект переносится на C++20: CMake ≥ 3.25, vcpkg manifest, Boost.Asio/Beast/JSON,
+OpenSSL 3 и GoogleTest. `src/puls` уже содержит CLI, application, engine и оба
+протокола; GUI, Android и release builder пока остаются в Go. Пока существуют
+обе реализации, изменения протоколов, CLI и JSON вносятся в обе либо
+фиксируются как расхождение в `docs/architecture.md`.
+
+- `src/puls/core`: `Context`/`CancelScope`, `Error`/`Result`, JSON, IP, text;
+- `src/puls/net`: HTTP/1.1, WebSocket и TLS с системными корнями;
+- `src/puls/{measure,service,application,ui,cli}` и
+  `src/puls/service/{yandex,speedtestru}` сохраняют границы Go-пакетов выше;
+- `tests`: GoogleTest, `tests/support` — локальные HTTPS/WSS mocks.
+
+Правила C++:
+
+- отмена идёт только через `Context`; блокирующая операция после `ctx.done()`
+  закрывает сокет и возвращается, а не ждёт timeout;
+- ошибки — `Error` с тегами и деталями (`is`/`as` вместо `errors.Is/As`),
+  значения — `Result<T>`; сетевые и протокольные ошибки не передаются
+  исключениями, текст сообщения не анализируется;
+- потоки workers всегда join-ятся; detached-поток допустим только для
+  отменяемого DNS resolve;
+- зависимости добавляются только в `vcpkg.json`; `builtin-baseline` и
+  `VCPKG_COMMIT` в `.github/workflows/cpp.yml` меняются вместе;
+- код форматируется `clang-format` 18 по `.clang-format`; предупреждения
+  компилятора в CI считаются ошибками.
+
 ## Инварианты engine
 
 Любое изменение обязано сохранять:
@@ -182,12 +210,12 @@ golden tests.
 2. Найди код и связанные тесты через `rg`.
 3. Сначала определи проверяемый invariant или regression test.
 4. Не перезаписывай несвязанные пользовательские изменения.
-5. Форматируй Go через `gofmt`.
+5. Форматируй Go через `gofmt`, C++ — через `clang-format`.
 6. Сначала запускай targeted tests, затем полную проверку.
 7. Перечитай diff и проверь отсутствие secrets/generated artifacts.
 
-Не используй destructive Git commands. Не коммить `puls`, `dist/`, tokens,
-production API responses или captures с персональными данными.
+Не используй destructive Git commands. Не коммить `puls`, `dist/`, `build/`,
+tokens, production API responses или captures с персональными данными.
 
 ## Проверки
 
@@ -203,6 +231,21 @@ govulncheck ./...
 actionlint .github/workflows/*.yml
 shellcheck scripts/install.sh
 ```
+
+C++ проверки:
+
+```sh
+cmake --preset debug && cmake --build --preset debug
+ctest --preset debug --repeat until-fail:10
+cmake --preset sanitize && cmake --build --preset sanitize && ctest --preset sanitize
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
+git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 --dry-run --Werror
+```
+
+Без vcpkg используй preset `system-debug` с системными Boost ≥ 1.83,
+OpenSSL ≥ 3.0 и GTest; санитайзеры включает `-DPULS_SANITIZERS=...`. Live tests
+собираются с `-DPULS_LIVE_TESTS=ON`. Workflow `cpp.yml` обязан проходить на
+Linux GCC/Clang, ASan+UBSan, TSan, macOS и Windows MSVC.
 
 Network tests используют local HTTP/WebSocket mocks и покрывают success, exact
 bytes, malformed frames/JSON, 401/403/5xx, disconnect, partial success,
@@ -223,7 +266,7 @@ archives, manifest schema 2, SHA-256, installers, PATH/update/uninstall,
 
 - поведение соответствует задаче и протоколам;
 - mock/golden/regression tests обновлены;
-- test ×10, race, vet и static/security checks прошли;
+- test ×10, race/sanitizers, vet, clang-format и static/security checks прошли;
 - help/docs совпадают с CLI и JSON;
 - installers и шесть release targets проверены;
 - diff не содержит secrets и случайных artifacts;
