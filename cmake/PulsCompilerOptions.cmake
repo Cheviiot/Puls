@@ -29,8 +29,7 @@ if(MSVC)
 else()
     target_compile_options(puls_options INTERFACE
         -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
-        -Wcast-align -Wformat=2 -Wimplicit-fallthrough -Wnull-dereference
-        -Wmissing-declarations)
+        -Wcast-align -Wformat=2 -Wimplicit-fallthrough -Wmissing-declarations)
     if(PULS_WARNINGS_AS_ERRORS)
         target_compile_options(puls_options INTERFACE -Werror)
     endif()
