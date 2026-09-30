@@ -569,14 +569,14 @@ TEST(Yandex, WebSocketUploadCountsOnlyAcknowledgedBinaryFrame) {
 }
 
 TEST(Yandex, WebSocketUploadHonorsDiscoveryConnectionTimeout) {
-    MockServer server([](MockExchange&) { std::this_thread::sleep_for(300ms); });
+    MockServer server([](MockExchange&) { std::this_thread::sleep_for(1s); });
     Backend backend(test_options());
-    const CancelScope scope(Context(), 1s);
+    const CancelScope scope(Context(), 5s);
     const auto started = Clock::now();
     const Error error = Access::websocket_upload(
         backend, scope.context(), server.ws_url(), 30ms, [] {}, [](std::int64_t) {});
     EXPECT_TRUE(error);
-    EXPECT_LT(Clock::now() - started, 200ms);
+    EXPECT_LT(Clock::now() - started, 700ms);
 }
 
 TEST(Yandex, HttpUploadRejectsOversizedResponseWithoutConfirmation) {

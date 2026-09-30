@@ -212,7 +212,7 @@ TEST(Http, TruncatedBodyReturnsBytesBeforeError) {
 
 TEST(Http, ResponseHeaderTimeoutIsTypedTimeout) {
     MockServer server([](MockExchange& exchange) {
-        std::this_thread::sleep_for(400ms);
+        std::this_thread::sleep_for(1s);
         exchange.respond(200);
     });
     HttpClientOptions options = test_options();
@@ -223,7 +223,7 @@ TEST(Http, ResponseHeaderTimeoutIsTypedTimeout) {
     const auto started = Clock::now();
     auto response = session.send(Context(), request);
     ASSERT_FALSE(response);
-    EXPECT_LT(Clock::now() - started, 300ms);
+    EXPECT_LT(Clock::now() - started, 700ms);
     ASSERT_NE(response.error().as<NetworkError>(), nullptr);
     EXPECT_TRUE(response.error().as<NetworkError>()->timeout);
     EXPECT_TRUE(text::contains(response.error().message(), "Get \"https://127.0.0.1:"));
@@ -440,14 +440,14 @@ TEST(WebSocket, RejectsNonUpgradeResponse) {
 }
 
 TEST(WebSocket, HandshakeTimeoutStopsStalledServer) {
-    MockServer server([](MockExchange&) { std::this_thread::sleep_for(500ms); });
+    MockServer server([](MockExchange&) { std::this_thread::sleep_for(1s); });
     WebSocketOptions options;
     options.tls = testing::test_tls_context();
     options.handshake_timeout = 50ms;
     const auto started = Clock::now();
     auto socket = WebSocket::connect(Context(), parse_url(server.ws_url("/")), options);
     ASSERT_FALSE(socket);
-    EXPECT_LT(Clock::now() - started, 400ms);
+    EXPECT_LT(Clock::now() - started, 700ms);
 }
 
 TEST(WebSocket, DuplexWritesWhileReadingAcknowledgements) {

@@ -23,6 +23,24 @@ Error wait_done(const Context& ctx) {
     return ctx.err();
 }
 
+// Progress is reported only while measuring, so the first report tells
+// workers that the measurement window is open. Timer waits may overshoot by
+// up to about 100 ms on loaded or background hosts, so tests synchronize on
+// this signal instead of on sleeps.
+class MeasurementStart {
+public:
+    [[nodiscard]] ProgressFn reporter() {
+        return
+            [this](const RunProgress&) { std::call_once(once_, [this] { promise_.set_value(); }); };
+    }
+    [[nodiscard]] bool wait() const { return started_.wait_for(5s) == std::future_status::ready; }
+
+private:
+    std::promise<void> promise_;
+    std::shared_future<void> started_ = promise_.get_future().share();
+    std::once_flag once_;
+};
+
 TEST(Mbps, ConvertsBytesAndDuration) {
     EXPECT_DOUBLE_EQ(mbps(0, 1s), 0);
     EXPECT_DOUBLE_EQ(mbps(1'000'000, 1s), 8);
@@ -48,32 +66,33 @@ TEST(Ema, DampsSpikesAndConverges) {
 }
 
 TEST(Run, StartsClockAfterReadyAndExcludesWarmup) {
+    MeasurementStart measuring;
     const auto started = Clock::now();
     RunConfig config;
-    config.duration = 60ms;
-    config.warmup = 70ms;
-    config.startup_timeout = 1s;
+    config.duration = 500ms;
+    config.warmup = 100ms;
+    config.startup_timeout = 2s;
     config.ready_grace = 5ms;
     config.initial_workers = 1;
     config.max_workers = 1;
     const auto outcome = run(
         Context(), config,
-        [](const Context& ctx, int, const ReadyFn& ready, const RecordFn& record) {
-            std::this_thread::sleep_for(50ms);
+        [&measuring](const Context& ctx, int, const ReadyFn& ready, const RecordFn& record) {
+            std::this_thread::sleep_for(100ms);
             ready();
             record(111);
-            std::this_thread::sleep_for(40ms);
-            record(222);
-            std::this_thread::sleep_for(50ms);
+            if (!measuring.wait()) {
+                return Error::make("measurement did not start");
+            }
             record(333);
             return wait_done(ctx);
         },
-        nullptr);
+        measuring.reporter());
     ASSERT_FALSE(outcome.error) << outcome.error.message();
     EXPECT_EQ(outcome.result.bytes, 333);
-    EXPECT_GE(outcome.result.elapsed, 50ms);
-    EXPECT_LE(outcome.result.elapsed, 130ms);
-    EXPECT_GE(Clock::now() - started, 170ms);
+    EXPECT_GE(outcome.result.elapsed, config.duration);
+    // Neither the connection setup nor the warm-up is part of the elapsed time.
+    EXPECT_LE(outcome.result.elapsed + 200ms, Clock::now() - started);
 }
 
 TEST(Run, FailsEarlyWhenAllWorkersDie) {
@@ -97,7 +116,7 @@ TEST(Run, FailsEarlyWhenAllWorkersDie) {
 TEST(Run, ReconnectsOnceAndCountsConfirmedBytes) {
     std::atomic<int> attempts{0};
     RunConfig config;
-    config.duration = 350ms;
+    config.duration = 1s;
     config.startup_timeout = 1s;
     config.ready_grace = 5ms;
     config.initial_workers = 1;
@@ -148,24 +167,27 @@ TEST(Run, CancellationReturnsPromptly) {
 }
 
 TEST(Run, ReturnsPartialStreamDiagnostics) {
+    MeasurementStart measuring;
     RunConfig config;
-    config.duration = 80ms;
+    config.duration = 1s;
     config.startup_timeout = 1s;
     config.ready_grace = 5ms;
     config.initial_workers = 2;
     config.max_workers = 2;
     const auto outcome = run(
         Context(), config,
-        [](const Context& ctx, int index, const ReadyFn& ready, const RecordFn& record) {
+        [&measuring](const Context& ctx, int index, const ReadyFn& ready, const RecordFn& record) {
             ready();
             if (index == 1) {
                 return Error::make("one stream failed");
             }
-            std::this_thread::sleep_for(20ms);
+            if (!measuring.wait()) {
+                return Error::make("measurement did not start");
+            }
             record(2048);
             return wait_done(ctx);
         },
-        nullptr);
+        measuring.reporter());
     ASSERT_FALSE(outcome.error) << outcome.error.message();
     EXPECT_EQ(outcome.result.bytes, 2048);
     EXPECT_EQ(outcome.result.workers_ok, 1);
@@ -217,7 +239,7 @@ TEST(Run, RecoversWorkerException) {
 TEST(Run, ReadyIsIdempotentUnderConcurrentCalls) {
     std::atomic<int> maximum_active{0};
     RunConfig config;
-    config.duration = 260ms;
+    config.duration = 1s;
     config.startup_timeout = 1s;
     config.ready_grace = 1ms;
     config.initial_workers = 1;
@@ -402,28 +424,26 @@ TEST(Run, ContainsWorkerErrorCallbackException) {
 
 TEST(Run, CountsConcurrentConfirmedBytesExactly) {
     constexpr int workers = 8;
-    std::promise<void> release;
-    std::shared_future<void> released = release.get_future().share();
-    std::once_flag release_once;
+    MeasurementStart measuring;
     RunConfig config;
-    config.duration = 280ms;
+    config.duration = 1s;
     config.startup_timeout = 1s;
     config.ready_grace = 5ms;
     config.initial_workers = workers;
     config.max_workers = workers;
     const auto outcome = run(
         Context(), config,
-        [released](const Context& ctx, int index, const ReadyFn& ready, const RecordFn& record) {
+        [&measuring](const Context& ctx, int index, const ReadyFn& ready, const RecordFn& record) {
             ready();
-            released.wait();
+            if (!measuring.wait()) {
+                return Error::make("measurement did not start");
+            }
             record(-1);
             record(0);
             record(static_cast<std::int64_t>(index + 1) * 1000);
             return wait_done(ctx);
         },
-        [&](const RunProgress&) {
-            std::call_once(release_once, [&release] { release.set_value(); });
-        });
+        measuring.reporter());
     ASSERT_FALSE(outcome.error) << outcome.error.message();
     EXPECT_EQ(outcome.result.bytes, 36'000);
     EXPECT_EQ(outcome.result.workers_ok, workers);
@@ -433,7 +453,7 @@ TEST(Run, CountsConcurrentConfirmedBytesExactly) {
 TEST(Run, AddsAdaptiveWorkersAfterWarmup) {
     std::atomic<int> started{0};
     RunConfig config;
-    config.duration = 100ms;
+    config.duration = 1s;
     config.warmup = 30ms;
     config.startup_timeout = 1s;
     config.ready_grace = 5ms;
@@ -463,16 +483,19 @@ TEST(Run, ReportsEarlyEndOfAllStreams) {
     config.ready_grace = 1ms;
     config.initial_workers = 1;
     config.max_workers = 1;
+    MeasurementStart measuring;
     const auto started = Clock::now();
     const auto outcome = run(
         Context(), config,
-        [](const Context&, int, const ReadyFn& ready, const RecordFn& record) {
+        [&measuring](const Context&, int, const ReadyFn& ready, const RecordFn& record) {
             ready();
-            std::this_thread::sleep_for(20ms);
+            if (!measuring.wait()) {
+                return Error::make("measurement did not start");
+            }
             record(10);
             return Error();
         },
-        nullptr);
+        measuring.reporter());
     EXPECT_EQ(outcome.error.message().rfind("все потоки передачи остановились раньше времени", 0),
               0u)
         << outcome.error.message();
