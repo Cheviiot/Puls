@@ -33,6 +33,38 @@ namespace http = beast::http;
 namespace websocket = beast::websocket;
 using tcp = asio::ip::tcp;
 
+// A connection socket that only MockServer closes. Stopping the server shuts
+// connections down from another thread, which must not race with a close by
+// the connection thread.
+class ServerSocket : public tcp::socket {
+public:
+    using tcp::socket::basic_stream_socket;
+};
+
+// Beast's WebSocket teardown for TCP sockets without the final close; found
+// by argument-dependent lookup for plain and TLS connections.
+void teardown(beast::role_type role, ServerSocket& socket, boost::system::error_code& error) {
+    if (role == beast::role_type::server) {
+        socket.shutdown(tcp::socket::shutdown_send, error);
+        if (error) {
+            return;
+        }
+    }
+    char buffer[2048];
+    for (;;) {
+        const std::size_t count = socket.read_some(asio::buffer(buffer), error);
+        if (error) {
+            if (error == asio::error::eof) {
+                error = {};
+            }
+            return;
+        }
+        if (count == 0) {
+            return;
+        }
+    }
+}
+
 struct TestCertificate {
     std::string certificate;
     std::string key;
@@ -311,7 +343,7 @@ std::string MockRequest::query_value(std::string_view key) const {
 struct MockServer::Impl {
     struct Connection {
         explicit Connection(asio::io_context& io) : socket(io) {}
-        tcp::socket socket;
+        ServerSocket socket;
         std::thread thread;
     };
 
@@ -324,9 +356,9 @@ struct MockServer::Impl {
     std::mutex mutex;
     std::vector<std::unique_ptr<Connection>> connections;
 
-    void serve_connection(tcp::socket& socket) {
+    void serve_connection(ServerSocket& socket) {
         if (tls) {
-            asio::ssl::stream<tcp::socket&> stream(socket, *tls);
+            asio::ssl::stream<ServerSocket&> stream(socket, *tls);
             boost::system::error_code error;
             stream.handshake(asio::ssl::stream_base::server, error);
             if (!error) {
