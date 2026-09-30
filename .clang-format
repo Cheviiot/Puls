@@ -1,0 +1,38 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+IndentWidth: 4
+ColumnLimit: 100
+AccessModifierOffset: -4
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+DerivePointerAlignment: false
+PointerAlignment: Left
+FixNamespaceComments: true
+NamespaceIndentation: None
+IncludeBlocks: Regroup
+# Order: own header, project, test support, third-party libraries, then the
+# standard library and platform SDKs. <windows.h> must precede the other
+# Windows SDK headers.
+IncludeCategories:
+  - Regex: '^"puls/'
+    Priority: 1
+  - Regex: '^"support/'
+    Priority: 2
+  - Regex: '^<(boost|openssl|gtest|gmock)/'
+    Priority: 3
+  - Regex: '^<windows\.h>$'
+    Priority: 4
+  - Regex: '^<'
+    Priority: 5
+  - Regex: '.*'
+    Priority: 6
+SortIncludes: CaseSensitive
+...

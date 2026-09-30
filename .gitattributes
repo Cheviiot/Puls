@@ -1,6 +1,10 @@
 * text=auto eol=lf
 
 *.go text diff=golang
+*.cpp text diff=cpp
+*.hpp text diff=cpp
+*.cmake text
+CMakeLists.txt text
 *.md text diff=markdown
 *.yml text
 *.yaml text
