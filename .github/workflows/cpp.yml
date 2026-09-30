@@ -1,0 +1,152 @@
+name: C++
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match builtin-baseline in vcpkg.json.
+  VCPKG_COMMIT: 4cb050be2cfa7a947cdd2dd1a70e24b17774c979
+  VCPKG_DISABLE_METRICS: "1"
+
+jobs:
+  format:
+    name: Форматирование C++
+    # Pushes already check pull requests opened from branches of this repository.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-format-18
+      - name: Check formatting
+        run: git ls-files -z '*.cpp' '*.hpp' | xargs -0 clang-format-18 --dry-run --Werror
+
+  build:
+    name: ${{ matrix.name }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux · GCC
+            os: ubuntu-24.04
+            preset: release
+            triplet: x64-linux
+            cc: gcc-14
+            cxx: g++-14
+            artifact: linux-x64
+          - name: Linux · Clang
+            os: ubuntu-24.04
+            preset: release
+            triplet: x64-linux
+            cc: clang-18
+            cxx: clang++-18
+          - name: Linux · ASan и UBSan
+            os: ubuntu-24.04
+            preset: sanitize
+            triplet: x64-linux
+            cc: clang-18
+            cxx: clang++-18
+          - name: Linux · TSan
+            os: ubuntu-24.04
+            preset: tsan
+            triplet: x64-linux
+            cc: clang-18
+            cxx: clang++-18
+          - name: macOS · Apple Clang
+            os: macos-15
+            preset: release
+            triplet: arm64-osx
+            artifact: macos-arm64
+          - name: Windows · MSVC
+            os: windows-2025
+            preset: windows-release
+            triplet: x64-windows-static
+            artifact: windows-x64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
+      - name: Select compiler
+        if: matrix.cxx != ''
+        run: |
+          echo "CC=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+      - name: Install sanitizer runtime
+        if: matrix.preset == 'sanitize' || matrix.preset == 'tsan'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libclang-rt-18-dev
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+      - name: Set up vcpkg
+        shell: bash
+        run: |
+          temp="${RUNNER_TEMP//\\//}"
+          git init --quiet "$temp/vcpkg"
+          git -C "$temp/vcpkg" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_COMMIT"
+          git -C "$temp/vcpkg" checkout --quiet FETCH_HEAD
+          mkdir -p "$temp/vcpkg-binary-cache"
+          {
+            echo "VCPKG_ROOT=$temp/vcpkg"
+            echo "VCPKG_BINARY_SOURCES=clear;files,$temp/vcpkg-binary-cache,readwrite"
+          } >> "$GITHUB_ENV"
+      - name: Bootstrap vcpkg
+        if: runner.os != 'Windows'
+        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
+      - name: Bootstrap vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics'
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/triplets/*.cmake') }}
+          restore-keys: |
+            vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON
+      # Saved before building so that a compile error does not discard the
+      # dependencies installed while configuring.
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+      - name: Upload puls
+        if: matrix.artifact != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: puls-${{ matrix.artifact }}
+          path: |
+            build/${{ matrix.preset }}/src/puls
+            build/${{ matrix.preset }}/src/puls.exe
+          if-no-files-found: error
+          retention-days: 14
