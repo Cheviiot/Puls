@@ -5,10 +5,10 @@ go 1.26.7
 require (
 	fyne.io/fyne/v2 v2.8.0
 	github.com/gorilla/websocket v1.5.3
-	golang.org/x/term v0.45.0
+	golang.org/x/term v0.46.0
 )
 
-require golang.org/x/sys v0.47.0
+require golang.org/x/sys v0.48.0
 
 require (
 	fyne.io/systray v1.12.2 // indirect
