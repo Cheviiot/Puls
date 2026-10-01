@@ -8,26 +8,45 @@
 #include <QPalette>
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
+#include <QQuickWindow>
+#include <QSGRendererInterface>
 #include <QStyleHints>
 #include <QUrl>
 #include <QVariant>
 
 #include <cstdlib>
+#include <string>
+#include <string_view>
 
 namespace puls::gui {
 
 namespace {
 
-// Without X11 or Wayland Qt aborts the process, so report it as an error.
-Error check_display() {
+// Without a display Qt aborts the process, so report it as an error.
+Error check_display([[maybe_unused]] const service::LogFunc& log) {
 #if defined(__linux__) && !defined(__ANDROID__)
     const auto defined = [](const char* name) {
         const char* value = std::getenv(name);
         return value != nullptr && *value != '\0';
     };
+#if defined(PULS_QT_STATIC)
+    // The static build contains only the X11 platform plugin; Wayland
+    // sessions run it through XWayland.
+    const char* platform = std::getenv("QT_QPA_PLATFORM");
+    if (platform != nullptr && std::string_view(platform).find("xcb") == std::string_view::npos) {
+        if (log) {
+            log("QT_QPA_PLATFORM=" + std::string(platform) + " заменён на xcb");
+        }
+        qputenv("QT_QPA_PLATFORM", "xcb");
+    }
+    if (!defined("DISPLAY")) {
+        return Error::make("нет графического окружения X11: не задан DISPLAY");
+    }
+#else
     if (!defined("DISPLAY") && !defined("WAYLAND_DISPLAY") && !defined("QT_QPA_PLATFORM")) {
         return Error::make("нет графического окружения: не заданы DISPLAY и WAYLAND_DISPLAY");
     }
+#endif
 #endif
     return {};
 }
@@ -43,7 +62,7 @@ bool system_dark() {
 } // namespace
 
 Error run(const Context& ctx, const Options& options) {
-    if (Error error = check_display()) {
+    if (Error error = check_display(options.log)) {
         return error;
     }
     if (ctx.done()) {
@@ -51,7 +70,7 @@ Error run(const Context& ctx, const Options& options) {
     }
     // Qt keeps references to the arguments for the lifetime of the application.
     static int argc = 1;
-    static char name[] = "puls";
+    static char name[] = "puls-gui";
     static char* argv[] = {name, nullptr};
     QGuiApplication::setOrganizationName(QStringLiteral("Cheviiot"));
     QGuiApplication::setOrganizationDomain(QStringLiteral("cheviiot.github.io"));
@@ -60,6 +79,14 @@ Error run(const Context& ctx, const Options& options) {
     QGuiApplication::setDesktopFileName(QStringLiteral("io.github.cheviiot.puls"));
     QGuiApplication application(argc, argv);
     QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/puls/assets/Icon.png")));
+#if defined(PULS_QT_STATIC) && defined(__linux__) && !defined(__ANDROID__)
+    // The software renderer does not depend on the OpenGL drivers of the
+    // system and is fast enough for the dashboard.
+    if (qEnvironmentVariableIsEmpty("QT_QUICK_BACKEND") &&
+        qEnvironmentVariableIsEmpty("QSG_RHI_BACKEND")) {
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    }
+#endif
     QQuickStyle::setStyle(QStringLiteral("Material"));
 
     SettingsStore store;

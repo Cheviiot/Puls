@@ -85,12 +85,14 @@ application, engine и оба протокола; сборка Android и releas
 остаются в Go. Пока существуют обе реализации, изменения протоколов, CLI и
 JSON вносятся в обе либо фиксируются как расхождение в `docs/architecture.md`.
 
-- `src/puls/core`: `Context`/`CancelScope`, `Error`/`Result`, JSON, IP, text;
+- `src/puls/core`: `Context`/`CancelScope`, `Error`/`Result`, прерывания
+  (Ctrl+C, SIGTERM), JSON, IP, text;
 - `src/puls/net`: HTTP/1.1, WebSocket и TLS с системными корнями;
 - `src/puls/{measure,service,application,ui,cli}` и
   `src/puls/service/{yandex,speedtestru}` сохраняют границы Go-пакетов выше;
 - `src/puls/gui`: `model` — состояние и поведение dashboard без Qt;
-  `controller`, `run` и `qml/` — тонкий слой Qt Quick над моделью;
+  `controller`, `run` и `qml/` — тонкий слой Qt Quick над моделью; `main.cpp`
+  — программа `puls-gui`;
 - `tests`: GoogleTest, `tests/support` — локальные HTTPS/WSS mocks.
 
 Правила C++:
@@ -208,8 +210,9 @@ golden tests.
 - Держи один mobile-first dashboard без gauges и истории: cyan accent,
   системная/светлая/тёмная темы, понятные состояния start/stop/error.
 - Background/close отменяет активное измерение через context.
-- `puls` без аргументов остаётся CLI; `puls gui` открывает окно; Android всегда
-  запускает GUI.
+- `puls` без аргументов остаётся CLI и не зависит от Qt. Окно открывает
+  отдельная программа `puls-gui`; `puls gui` запускает её из каталога `puls`
+  (на macOS также `Puls.app`). Android всегда запускает GUI.
 
 ## Порядок работы
 
@@ -254,9 +257,12 @@ OpenSSL ≥ 3.0, Qt ≥ 6.4 и GTest; санитайзеры включает `-
 сборку без Qt — `-DPULS_BUILD_GUI=OFF`. GUI-тесты работают с
 `QT_QPA_PLATFORM=offscreen`; `PULS_GUI_SCREENSHOTS=<dir>` сохраняет снимки
 экрана для проверки вёрстки. Live tests собираются с `-DPULS_LIVE_TESTS=ON`.
-Workflow `cpp.yml` обязан проходить на Linux GCC/Clang, ASan+UBSan, TSan, macOS
-и Windows MSVC. Qt из vcpkg линкуется динамически (overlay triplets в
-`cmake/triplets`); на Linux и macOS зависимости собираются только в Release.
+Workflow `cpp.yml` обязан проходить для шести desktop targets (Linux, macOS
+и Windows на x64 и ARM64; Windows ARM64 — только CLI), Linux Clang, ASan+UBSan
+и TSan. Зависимости из vcpkg, включая Qt, линкуются статически, на Windows и
+CRT (overlay triplets в `cmake/triplets`), поэтому программам не нужны DLL;
+на Linux и macOS зависимости собираются только в Release. Linux с GUI
+собирается в контейнере manylinux_2_28, чтобы программам хватало glibc 2.28.
 TSan собирается без Qt: неинструментированный Qt синхронизирует очередь
 событий через futex, и TSan даёт ложные срабатывания.
 

@@ -73,15 +73,33 @@ Android-приложения и release builder пока остаются в Go 
   тестируются во всех конфигурациях; `DashboardController` запускает runner в
   рабочем потоке и передаёт события в UI-поток queued-вызовами. Настройки
   хранятся в `QSettings` с теми же ключами, что и в Go-версии.
-- Qt из vcpkg линкуется динамически (LGPL; плагины платформы и QML
-  загружаются во время работы); остальные зависимости — статически.
+- GUI — отдельная программа `puls-gui` (на macOS — `Puls.app`), поэтому CLI
+  не зависит от Qt и графических библиотек системы. `puls gui` ищет её в
+  каталоге `puls`, на macOS также в `~/Applications` и `/Applications`, и на
+  Unix заменяет ею свой процесс, а на Windows запускает её, не дожидаясь
+  завершения, как другие графические программы.
+- Все зависимости из vcpkg, включая Qt, линкуются статически, на Windows
+  вместе с CRT: архив выпуска содержит готовые программы без DLL и Visual C++
+  Redistributable. Qt используется по LGPL 3: исходный код Puls открыт, и
+  программу можно пересобрать с изменённым Qt; `THIRD_PARTY_NOTICES.txt` в
+  архиве перечисляет лицензии зависимостей.
+- Linux-сборка с GUI выполняется в контейнере manylinux_2_28 (AlmaLinux 8,
+  GCC из gcc-toolset), поэтому программам достаточно glibc 2.28 и
+  системных библиотек X11. Qt в ней содержит только платформу X11 (в
+  сеансах Wayland окно работает через XWayland) и по умолчанию рисует
+  программным рендерером, не завися от драйверов OpenGL.
 - Overlay-порт `cmake/ports/libuuid` намеренно пуст: порт fontconfig в vcpkg
   объявляет зависимость от libuuid, но fontconfig 2.17 её не использует, а
   исходники libuuid загружаются с ненадёжного SourceForge.
 - На Linux и macOS зависимости vcpkg собираются только в Release. MSVC не
-  смешивает отладочную и обычную CRT, поэтому на Windows preset
-  `windows-release` использует triplet `x64-windows-static-md-release`, а
-  `windows-debug` собирает обе конфигурации.
+  смешивает отладочную и обычную CRT, поэтому на Windows presets
+  `windows-release` и `windows-arm64-release` используют triplets
+  `*-windows-static-release`, а `windows-debug` собирает обе конфигурации.
+- `PULS_PORTABLE_INSTALL=ON` превращает `cmake --install` в раскладку архива
+  выпуска: программы, документы, `THIRD_PARTY_NOTICES.txt` и значок для
+  ярлыка Linux в корне каталога. Без этого параметра установка следует
+  GNUInstallDirs и добавляет `.desktop`-файл и значок для пакетов
+  дистрибутивов.
 - На macOS у qtbase включена функция `dnslookup`: без неё Qt 6.11 использует
   libresolv в `QHostInfo`, но не линкует её.
 - JSON schema 1 кодируется побайтно совместимо с Go (`encoding/json` с
@@ -100,7 +118,7 @@ Android-приложения и release builder пока остаются в Go 
   хранилище; автоматическая загрузка отсутствующих корней Windows не
   выполняется.
 - Минимальная macOS — 13.3 из-за `std::to_chars` для чисел с плавающей точкой.
-- Windows-сборка использует динамическую CRT (`x64-windows-static-md`), так
-  как Qt поставляется в виде DLL.
-- Qt из vcpkg на Linux собирается с платформой X11; в сеансах Wayland окно
+- Графический интерфейс — отдельная программа `puls-gui`; `puls gui`
+  запускает её. На Windows `puls gui` возвращается сразу после запуска окна.
+- Выпуск для Linux собирается с Qt только для X11; в сеансах Wayland окно
   работает через XWayland.

@@ -1,6 +1,7 @@
 #include "puls/application/runner.hpp"
 #include "puls/cli/application.hpp"
 #include "puls/cli/config.hpp"
+#include "puls/cli/gui_launcher.hpp"
 #include "puls/cli/render.hpp"
 #include "puls/core/json.hpp"
 #include "puls/core/text.hpp"
@@ -14,8 +15,26 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
+#include <random>
+#include <string>
+#include <thread>
+#include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+
+extern char** environ;
+#endif
 
 namespace puls {
 namespace {
@@ -462,6 +481,126 @@ TEST(Application, LaunchesGuiAndReportsUnavailableGui) {
     EXPECT_EQ(app.run(Context(), {"gui"}), 2);
     app.launch_gui = [](const Context&, const cli::GuiOptions&) { return Error::make("broken"); };
     EXPECT_EQ(app.run(Context(), {"gui"}), 1);
+}
+
+// Runs program with ASCII arguments and returns its exit code, or -1.
+int run_program(const std::filesystem::path& program, const std::vector<std::string>& arguments) {
+#if defined(_WIN32)
+    std::wstring command_line = L"\"" + program.wstring() + L"\"";
+    for (const std::string& argument : arguments) {
+        command_line += L" " + std::wstring(argument.begin(), argument.end());
+    }
+    STARTUPINFOW startup{};
+    startup.cb = sizeof startup;
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(program.c_str(), command_line.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                       nullptr, &startup, &process) == 0) {
+        return -1;
+    }
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD code = 0;
+    GetExitCodeProcess(process.hProcess, &code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return static_cast<int>(code);
+#else
+    std::vector<std::string> storage{program.string()};
+    storage.insert(storage.end(), arguments.begin(), arguments.end());
+    std::vector<char*> argv;
+    for (std::string& value : storage) {
+        argv.push_back(value.data());
+    }
+    argv.push_back(nullptr);
+    pid_t child = 0;
+    if (posix_spawn(&child, storage.front().c_str(), nullptr, nullptr, argv.data(), environ) != 0) {
+        return -1;
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+}
+
+void set_environment(const char* name, const std::string& value) {
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+class TemporaryDirectory {
+public:
+    TemporaryDirectory() {
+        std::random_device random;
+        path_ = std::filesystem::temp_directory_path() /
+                ("puls-test-" + std::to_string(random()) + std::to_string(random()));
+        std::filesystem::create_directories(path_);
+    }
+    TemporaryDirectory(const TemporaryDirectory&) = delete;
+    TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
+    ~TemporaryDirectory() {
+        std::error_code ignored;
+        std::filesystem::remove_all(path_, ignored);
+    }
+
+    [[nodiscard]] const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+TEST(GuiLauncher, LooksForTheGuiNextToPulsFirst) {
+    namespace fs = std::filesystem;
+    const fs::path directory = fs::path("opt") / "puls";
+    const auto candidates = cli::gui_executable_candidates(directory, fs::path("home"));
+#if defined(_WIN32)
+    EXPECT_EQ(candidates, std::vector<fs::path>{directory / "puls-gui.exe"});
+#elif defined(__APPLE__)
+    const fs::path bundle = fs::path("Puls.app") / "Contents" / "MacOS" / "Puls";
+    EXPECT_EQ(candidates, (std::vector<fs::path>{directory / "puls-gui", directory / bundle,
+                                                 fs::path("home") / "Applications" / bundle,
+                                                 fs::path("/Applications") / bundle}));
+    EXPECT_EQ(cli::gui_executable_candidates(directory, {}).size(), 3U);
+#else
+    EXPECT_EQ(candidates, std::vector<fs::path>{directory / "puls-gui"});
+#endif
+}
+
+TEST(GuiLauncher, PulsStartsTheInstalledGui) {
+    namespace fs = std::filesystem;
+    const TemporaryDirectory directory;
+    const fs::path cli = directory.path() / fs::path(PULS_CLI_PATH).filename();
+    fs::copy_file(PULS_CLI_PATH, cli);
+    const fs::path output = directory.path() / "arguments.txt";
+    set_environment("PULS_FAKE_GUI_OUTPUT", output.string());
+#if defined(__APPLE__)
+    const bool installed_elsewhere = fs::exists("/Applications/Puls.app");
+#else
+    const bool installed_elsewhere = false;
+#endif
+    if (!installed_elsewhere) {
+        EXPECT_EQ(run_program(cli, {"gui"}), 2);
+    }
+
+#if defined(_WIN32)
+    fs::copy_file(PULS_FAKE_GUI_PATH, directory.path() / "puls-gui.exe");
+#else
+    fs::copy_file(PULS_FAKE_GUI_PATH, directory.path() / "puls-gui");
+#endif
+    EXPECT_EQ(run_program(cli, {"gui", "--verbose"}), 0);
+    // Windows does not wait for graphical programs.
+    for (int attempt = 0; attempt < 100 && !fs::exists(output); ++attempt) {
+        std::this_thread::sleep_for(100ms);
+    }
+    std::ifstream file(output, std::ios::binary);
+    const std::string arguments((std::istreambuf_iterator<char>(file)),
+                                std::istreambuf_iterator<char>());
+    EXPECT_EQ(arguments, "--verbose\n");
 }
 
 TEST(Application, JsonWriteFailureReturnsOne) {

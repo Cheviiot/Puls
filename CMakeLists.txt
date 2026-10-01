@@ -5,6 +5,7 @@ option(PULS_BUILD_GUI "Build the Qt Quick graphical interface" ON)
 option(PULS_LIVE_TESTS "Build tests that contact the real measurement services" OFF)
 option(PULS_SYSTEM_TLS_TESTS "Build a smoke test for the platform certificate store" OFF)
 option(PULS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(PULS_PORTABLE_INSTALL "Install the self-contained layout of the release archives" OFF)
 set(PULS_SANITIZERS "" CACHE STRING "Semicolon-separated sanitizers: address, undefined, thread")
 set(PULS_VERSION "dev" CACHE STRING "Version reported by `puls version`")
 
@@ -24,6 +25,9 @@ project(Puls
     DESCRIPTION "Internet latency and throughput measurement"
     HOMEPAGE_URL "https://github.com/Cheviiot/Puls"
     LANGUAGES CXX)
+if(WIN32)
+    enable_language(RC)
+endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are not supported; use a preset or -B build")
@@ -39,6 +43,7 @@ endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(PulsCompilerOptions)
+include(PulsPackaging)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
@@ -46,6 +51,13 @@ find_package(OpenSSL 3.0 REQUIRED)
 find_package(Boost 1.83 CONFIG REQUIRED COMPONENTS json)
 if(PULS_BUILD_GUI)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+    # A static Qt needs its plugins linked into each executable.
+    get_target_property(puls_qt_core_type Qt6::Core TYPE)
+    if(puls_qt_core_type STREQUAL "STATIC_LIBRARY")
+        set(PULS_QT_STATIC ON)
+    else()
+        set(PULS_QT_STATIC OFF)
+    endif()
 endif()
 
 add_subdirectory(src)

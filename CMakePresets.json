@@ -32,9 +32,9 @@
       },
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "cl",
-        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
-        "VCPKG_HOST_TRIPLET": "x64-windows-static-md",
-        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
+        "VCPKG_HOST_TRIPLET": "x64-windows-static",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>"
       }
     },
     {
@@ -73,7 +73,7 @@
     },
     {
       "name": "windows-debug",
-      "displayName": "Windows Debug (MSVC, vcpkg, shared Qt)",
+      "displayName": "Windows Debug (MSVC, vcpkg)",
       "inherits": "windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -81,12 +81,22 @@
     },
     {
       "name": "windows-release",
-      "displayName": "Windows Release (MSVC, vcpkg, shared Qt)",
+      "displayName": "Windows Release (MSVC, vcpkg)",
       "inherits": "windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
-        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md-release",
-        "VCPKG_HOST_TRIPLET": "x64-windows-static-md-release"
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-release",
+        "VCPKG_HOST_TRIPLET": "x64-windows-static-release"
+      }
+    },
+    {
+      "name": "windows-arm64-release",
+      "displayName": "Windows ARM64 Release (MSVC, vcpkg)",
+      "inherits": "windows",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "arm64-windows-static-release",
+        "VCPKG_HOST_TRIPLET": "arm64-windows-static-release"
       }
     },
     {
@@ -113,6 +123,7 @@
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "windows-debug", "configurePreset": "windows-debug" },
     { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-arm64-release", "configurePreset": "windows-arm64-release" },
     { "name": "system-debug", "configurePreset": "system-debug" },
     { "name": "system-release", "configurePreset": "system-release" }
   ],
@@ -134,6 +145,11 @@
     { "name": "tsan", "inherits": "test-base", "configurePreset": "tsan" },
     { "name": "windows-debug", "inherits": "test-base", "configurePreset": "windows-debug" },
     { "name": "windows-release", "inherits": "test-base", "configurePreset": "windows-release" },
+    {
+      "name": "windows-arm64-release",
+      "inherits": "test-base",
+      "configurePreset": "windows-arm64-release"
+    },
     { "name": "system-debug", "inherits": "test-base", "configurePreset": "system-debug" },
     { "name": "system-release", "inherits": "test-base", "configurePreset": "system-release" }
   ]

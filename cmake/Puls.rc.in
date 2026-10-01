@@ -1,0 +1,34 @@
+#pragma code_page(65001)
+
+#include <winver.h>
+
+1 ICON "@PULS_RC_ICON@"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION @PULS_VERSION_MAJOR@,@PULS_VERSION_MINOR@,@PULS_VERSION_PATCH@,0
+PRODUCTVERSION @PULS_VERSION_MAJOR@,@PULS_VERSION_MINOR@,@PULS_VERSION_PATCH@,0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041904B0"
+        BEGIN
+            VALUE "CompanyName", "Cheviiot"
+            VALUE "FileDescription", "@PULS_RC_DESCRIPTION@"
+            VALUE "FileVersion", "@PULS_VERSION@"
+            VALUE "InternalName", "@PULS_RC_FILE_NAME@"
+            VALUE "LegalCopyright", "MIT License"
+            VALUE "OriginalFilename", "@PULS_RC_FILE_NAME@"
+            VALUE "ProductName", "Puls"
+            VALUE "ProductVersion", "@PULS_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0419, 1200
+    END
+END

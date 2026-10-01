@@ -281,8 +281,6 @@ int main(int argc, char** argv) {
     };
     set_default("QT_QPA_PLATFORM", "offscreen");
     set_default("QT_QUICK_BACKEND", "software");
-    set_default("QT_PLUGIN_PATH", PULS_QT_PLUGIN_PATH);
-    set_default("QML_IMPORT_PATH", PULS_QML_IMPORT_PATH);
     QGuiApplication application(argc, argv);
     QQuickStyle::setStyle(QStringLiteral("Material"));
     ::testing::InitGoogleTest(&argc, argv);

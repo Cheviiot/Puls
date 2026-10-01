@@ -1,4 +1,4 @@
-#include "puls/cli/interrupt.hpp"
+#include "puls/core/interrupt.hpp"
 
 #include <atomic>
 
@@ -13,7 +13,7 @@
 #include <unistd.h>
 #endif
 
-namespace puls::cli {
+namespace puls {
 
 namespace {
 
@@ -143,4 +143,4 @@ InterruptHandler::~InterruptHandler() {
     target.store(nullptr);
 }
 
-} // namespace puls::cli
+} // namespace puls

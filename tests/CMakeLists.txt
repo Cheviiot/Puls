@@ -7,9 +7,9 @@ target_include_directories(puls_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(puls_test_support PUBLIC Puls::net GTest::gtest)
 puls_configure_target(puls_test_support)
 
-# NO_MAIN tests define main() themselves; PROPERTIES apply to every test case.
+# NO_MAIN tests define main() themselves.
 function(puls_add_test name)
-    cmake_parse_arguments(PARSE_ARGV 1 TEST "NO_MAIN" "" "SOURCES;LIBRARIES;PROPERTIES")
+    cmake_parse_arguments(PARSE_ARGV 1 TEST "NO_MAIN" "" "SOURCES;LIBRARIES")
     add_executable(${name} ${TEST_SOURCES})
     if(TEST_NO_MAIN)
         target_link_libraries(${name} PRIVATE puls_test_support GTest::gtest ${TEST_LIBRARIES})
@@ -18,7 +18,7 @@ function(puls_add_test name)
     endif()
     puls_configure_target(${name})
     gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST DISCOVERY_TIMEOUT 60
-        PROPERTIES TIMEOUT 120 ${TEST_PROPERTIES})
+        PROPERTIES TIMEOUT 120)
 endfunction()
 
 puls_add_test(puls_core_tests SOURCES core_test.cpp LIBRARIES Puls::core)
@@ -28,22 +28,23 @@ puls_add_test(puls_service_tests SOURCES service_test.cpp LIBRARIES Puls::servic
 puls_add_test(puls_yandex_tests SOURCES yandex_test.cpp LIBRARIES Puls::yandex)
 puls_add_test(puls_speedtestru_tests SOURCES speedtestru_test.cpp LIBRARIES Puls::speedtestru)
 puls_add_test(puls_cli_tests SOURCES cli_test.cpp LIBRARIES Puls::cli)
+# Stands in for puls-gui when the tests run the real puls executable.
+add_executable(puls_fake_gui support/fake_gui.cpp)
+puls_configure_target(puls_fake_gui)
+add_dependencies(puls_cli_tests puls puls_fake_gui)
+target_compile_definitions(puls_cli_tests PRIVATE
+    PULS_CLI_PATH="$<TARGET_FILE:puls>"
+    PULS_FAKE_GUI_PATH="$<TARGET_FILE:puls_fake_gui>")
 puls_add_test(puls_gui_model_tests SOURCES gui_model_test.cpp LIBRARIES Puls::gui_model)
 if(PULS_BUILD_GUI)
-    set(gui_test_properties)
-    if(WIN32)
-        # vcpkg copies only the DLLs the test links next to it; the plugins
-        # and QML modules load further Qt DLLs from the Qt bin directory.
-        set(gui_test_properties ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}")
+    puls_add_test(puls_gui_tests NO_MAIN SOURCES gui_test.cpp LIBRARIES Puls::gui)
+    if(PULS_QT_STATIC)
+        # The tests render without a display.
+        set_target_properties(puls_gui_tests PROPERTIES
+            QT_QML_ROOT_PATH "${PROJECT_SOURCE_DIR}/src/puls/gui/qml")
+        qt_import_plugins(puls_gui_tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+        qt_import_qml_plugins(puls_gui_tests)
     endif()
-    puls_add_test(puls_gui_tests NO_MAIN SOURCES gui_test.cpp LIBRARIES Puls::gui
-        PROPERTIES ${gui_test_properties})
-    # Qt finds its plugins and QML modules relative to its libraries; on
-    # Windows vcpkg copies the libraries next to the test, so pass the paths.
-    target_compile_definitions(puls_gui_tests PRIVATE
-        PULS_QT_PLUGIN_PATH="${QT6_INSTALL_PREFIX}/${QT6_INSTALL_PLUGINS}"
-        PULS_QML_IMPORT_PATH="${QT6_INSTALL_PREFIX}/${QT6_INSTALL_QML}")
 endif()
 
 if(PULS_LIVE_TESTS)

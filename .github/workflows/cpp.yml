@@ -39,18 +39,26 @@ jobs:
     name: ${{ matrix.name }}
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ${{ matrix.os }}
+    # Linux builds with the graphical interface run in manylinux_2_28 so that
+    # the executables need only glibc 2.28.
+    container: ${{ matrix.container }}
     # The first build of Qt without a cached binary package takes most of it.
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Linux · GCC · GUI
+          - name: Linux · x64 · GUI
             os: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
             preset: release
             triplet: x64-linux
-            cc: gcc-14
-            cxx: g++-14
+            gui: "ON"
+          - name: Linux · ARM64 · GUI
+            os: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            preset: release
+            triplet: arm64-linux
             gui: "ON"
           - name: Linux · Clang
             os: ubuntu-24.04
@@ -73,16 +81,28 @@ jobs:
             cc: clang-18
             cxx: clang++-18
             gui: "OFF"
-          - name: macOS · Apple Clang · GUI
+          - name: macOS · ARM64 · GUI
             os: macos-15
             preset: release
             triplet: arm64-osx
             gui: "ON"
-          - name: Windows · MSVC · GUI
+          - name: macOS · x64 · GUI
+            os: macos-15-intel
+            preset: release
+            triplet: x64-osx
+            gui: "ON"
+          - name: Windows · x64 · GUI
             os: windows-2025
             preset: windows-release
-            triplet: x64-windows-static-md-release
+            triplet: x64-windows-static-release
+            msvc-arch: x64
             gui: "ON"
+          - name: Windows · ARM64
+            os: windows-11-arm
+            preset: windows-arm64-release
+            triplet: arm64-windows-static-release
+            msvc-arch: arm64
+            gui: "OFF"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -98,15 +118,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes libclang-rt-18-dev
-      # System libraries for the X11 platform plugin of qtbase and autotools
-      # for the ports built with them.
-      - name: Install Qt system dependencies
-        if: runner.os == 'Linux' && matrix.gui == 'ON'
+      - name: Install Qt build dependencies (manylinux)
+        if: matrix.container != ''
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes '^libxcb.*-dev' libx11-xcb-dev libglu1-mesa-dev \
-            libxrender-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libegl1-mesa-dev \
-            autoconf autoconf-archive automake libtool
+          .github/scripts/manylinux-dependencies.sh
+          # Python for the Meson builds of vcpkg ports.
+          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
       # Autotools for libb2, a dependency of qtbase.
       - name: Install Qt build tools (macOS)
         if: runner.os == 'macOS' && matrix.gui == 'ON'
@@ -118,7 +135,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
         with:
-          arch: x64
+          arch: ${{ matrix.msvc-arch }}
       - name: Set up vcpkg
         shell: bash
         run: |
@@ -138,7 +155,8 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Bootstrap vcpkg
         if: runner.os != 'Windows'
-        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
+        # The statically linked musl build of vcpkg runs with the old glibc.
+        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics ${{ matrix.container && ''-musl'' || '''' }}'
       - name: Bootstrap vcpkg (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -151,10 +169,10 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: vcpkg-${{ matrix.os }}-${{ matrix.container && 'manylinux' || 'host' }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-
-            vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-
+            vcpkg-${{ matrix.os }}-${{ matrix.container && 'manylinux' || 'host' }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-
+            vcpkg-${{ matrix.os }}-${{ matrix.container && 'manylinux' || 'host' }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-
       - name: Mark restored vcpkg packages
         shell: bash
         run: touch "${RUNNER_TEMP//\\//}/vcpkg-cache-restored"

@@ -1,7 +1,9 @@
-# Core utilities shared by every layer: errors, cancellation, text, JSON.
+# Core utilities shared by every layer: errors, cancellation, interrupts,
+# text, JSON.
 add_library(puls_core STATIC
     puls/core/context.cpp
     puls/core/error.cpp
+    puls/core/interrupt.cpp
     puls/core/ip.cpp
     puls/core/json.cpp
     puls/core/text.cpp)
@@ -64,7 +66,7 @@ add_library(Puls::speedtestru ALIAS puls_speedtestru)
 target_link_libraries(puls_speedtestru PUBLIC Puls::service)
 puls_configure_target(puls_speedtestru)
 
-# Orchestration shared by the CLI and future graphical frontends.
+# Orchestration shared by the CLI and the graphical interface.
 add_library(puls_application STATIC
     puls/application/runner.cpp
     puls/application/types.cpp)
@@ -78,28 +80,6 @@ add_library(Puls::gui_model ALIAS puls_gui_model)
 target_link_libraries(puls_gui_model PUBLIC Puls::application)
 puls_configure_target(puls_gui_model)
 
-if(PULS_BUILD_GUI)
-    # Qt Quick dashboard over the dashboard model.
-    add_library(puls_gui STATIC
-        puls/gui/controller.cpp
-        puls/gui/run.cpp
-        puls/gui/settings_store.cpp)
-    add_library(Puls::gui ALIAS puls_gui)
-    set_target_properties(puls_gui PROPERTIES AUTOMOC ON)
-    target_link_libraries(puls_gui PUBLIC
-        Puls::gui_model Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
-    qt_add_resources(puls_gui "puls_gui_resources"
-        PREFIX "/puls"
-        BASE puls/gui
-        FILES
-            puls/gui/assets/Icon.png
-            puls/gui/qml/InfoCard.qml
-            puls/gui/qml/Main.qml
-            puls/gui/qml/MetricCard.qml
-            puls/gui/qml/SettingsDialog.qml)
-    puls_configure_target(puls_gui)
-endif()
-
 # Terminal output, colors, progress and the interactive menu.
 add_library(puls_ui STATIC
     puls/ui/select.cpp
@@ -112,7 +92,7 @@ puls_configure_target(puls_ui)
 add_library(puls_cli STATIC
     puls/cli/application.cpp
     puls/cli/config.cpp
-    puls/cli/interrupt.cpp
+    puls/cli/gui_launcher.cpp
     puls/cli/render.cpp)
 add_library(Puls::cli ALIAS puls_cli)
 target_link_libraries(puls_cli PUBLIC Puls::application Puls::ui)
@@ -121,12 +101,83 @@ puls_configure_target(puls_cli)
 add_executable(puls puls/cli/main.cpp)
 target_link_libraries(puls PRIVATE Puls::cli)
 target_compile_definitions(puls PRIVATE PULS_VERSION="${PULS_VERSION}")
-if(PULS_BUILD_GUI)
-    target_link_libraries(puls PRIVATE Puls::gui)
-    target_compile_definitions(puls PRIVATE PULS_HAS_GUI)
-endif()
 if(WIN32)
     target_link_libraries(puls PRIVATE shell32)
+    puls_add_windows_resources(puls "puls.exe" "Puls — проверка скорости интернета")
 endif()
 puls_configure_target(puls)
-install(TARGETS puls RUNTIME DESTINATION bin)
+install(TARGETS puls RUNTIME DESTINATION "${PULS_INSTALL_BINDIR}")
+
+if(PULS_BUILD_GUI)
+    # Qt Quick dashboard over the dashboard model.
+    add_library(puls_gui STATIC
+        puls/gui/controller.cpp
+        puls/gui/run.cpp
+        puls/gui/settings_store.cpp)
+    add_library(Puls::gui ALIAS puls_gui)
+    set_target_properties(puls_gui PROPERTIES AUTOMOC ON)
+    target_link_libraries(puls_gui PUBLIC
+        Puls::gui_model Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    if(PULS_QT_STATIC)
+        target_compile_definitions(puls_gui PRIVATE PULS_QT_STATIC)
+    endif()
+    qt_add_resources(puls_gui "puls_gui_resources"
+        PREFIX "/puls"
+        BASE puls/gui
+        FILES
+            puls/gui/assets/Icon.png
+            puls/gui/qml/InfoCard.qml
+            puls/gui/qml/Main.qml
+            puls/gui/qml/MetricCard.qml
+            puls/gui/qml/SettingsDialog.qml)
+    puls_configure_target(puls_gui)
+
+    # The graphical application; `puls gui` starts it.
+    qt_add_executable(puls-gui WIN32 MACOSX_BUNDLE puls/gui/main.cpp)
+    target_link_libraries(puls-gui PRIVATE Puls::gui Puls::ui)
+    target_compile_definitions(puls-gui PRIVATE PULS_VERSION="${PULS_VERSION}")
+    if(PULS_QT_STATIC)
+        set_target_properties(puls-gui PROPERTIES
+            QT_QML_ROOT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/puls/gui/qml")
+        qt_import_qml_plugins(puls-gui)
+        if(TARGET Qt6::QXcbGlxIntegrationPlugin)
+            qt_import_plugins(puls-gui
+                INCLUDE_BY_TYPE xcbglintegrations Qt6::QXcbGlxIntegrationPlugin)
+        endif()
+    endif()
+    if(WIN32)
+        puls_add_windows_resources(puls-gui "puls-gui.exe" "Puls — проверка скорости интернета")
+    elseif(APPLE)
+        puls_configure_macos_bundle(puls-gui)
+    endif()
+    puls_configure_target(puls-gui)
+    install(TARGETS puls-gui
+        RUNTIME DESTINATION "${PULS_INSTALL_BINDIR}"
+        BUNDLE DESTINATION "${PULS_INSTALL_BUNDLEDIR}")
+    if(APPLE)
+        # Stripping during installation invalidates the linker signature.
+        install(CODE "execute_process(COMMAND codesign --force --sign -
+            \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${PULS_INSTALL_BUNDLEDIR}/Puls.app\"
+            COMMAND_ERROR_IS_FATAL ANY)")
+    elseif(UNIX)
+        if(PULS_PORTABLE_INSTALL)
+            # The installer creates the menu entry with this icon.
+            install(FILES puls/gui/assets/Icon.png DESTINATION assets)
+        else()
+            install(FILES puls/gui/io.github.cheviiot.puls.desktop
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+            install(FILES puls/gui/assets/Icon.png
+                DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps"
+                RENAME io.github.cheviiot.puls.png)
+        endif()
+    endif()
+endif()
+
+install(FILES
+    "${PROJECT_SOURCE_DIR}/CHANGELOG.md"
+    "${PROJECT_SOURCE_DIR}/LICENSE"
+    "${PROJECT_SOURCE_DIR}/README.md"
+    DESTINATION "${PULS_INSTALL_DOCDIR}")
+if(PULS_PORTABLE_INSTALL)
+    puls_add_third_party_notices()
+endif()

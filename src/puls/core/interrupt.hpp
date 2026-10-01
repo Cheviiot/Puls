@@ -2,7 +2,7 @@
 
 #include "puls/core/context.hpp"
 
-namespace puls::cli {
+namespace puls {
 
 // Cancels scope on Ctrl+C, SIGTERM or a console close event. Later signals
 // are absorbed so that cleanup can finish. Only one handler may exist.
@@ -14,4 +14,4 @@ public:
     ~InterruptHandler();
 };
 
-} // namespace puls::cli
+} // namespace puls

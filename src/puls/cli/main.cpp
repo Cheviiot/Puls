@@ -2,12 +2,9 @@
 // first-party protocols of the supported measurement services.
 
 #include "puls/cli/application.hpp"
-#include "puls/cli/interrupt.hpp"
+#include "puls/cli/gui_launcher.hpp"
+#include "puls/core/interrupt.hpp"
 #include "puls/ui/terminal.hpp"
-
-#if defined(PULS_HAS_GUI)
-#include "puls/gui/run.hpp"
-#endif
 
 #include <exception>
 #include <string>
@@ -59,22 +56,11 @@ int main(int argc, char** argv) {
     puls::ui::ConsoleOutput errors(puls::ui::StandardStream::error);
     try {
         puls::CancelScope root{puls::Context()};
-        const puls::cli::InterruptHandler interrupts(root);
-#if defined(__ANDROID__) && defined(PULS_HAS_GUI)
-        // Android always opens the graphical interface.
-        const puls::Error error = puls::gui::run(root.context(), {PULS_VERSION, nullptr});
-        return error ? 1 : 0;
-#else
+        const puls::InterruptHandler interrupts(root);
         puls::cli::Application application(output, errors, PULS_VERSION);
         application.input_terminal = puls::ui::stdin_is_terminal();
-#if defined(PULS_HAS_GUI)
-        application.launch_gui = [](const puls::Context& ctx,
-                                    const puls::cli::GuiOptions& options) {
-            return puls::gui::run(ctx, puls::gui::Options{options.version, options.log});
-        };
-#endif
+        application.launch_gui = puls::cli::launch_installed_gui;
         return application.run(root.context(), arguments(argc, argv));
-#endif
     } catch (const std::exception& error) {
         errors.write(std::string("Ошибка: ") + error.what() + "\n");
         return 1;
