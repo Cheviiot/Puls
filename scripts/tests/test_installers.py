@@ -296,6 +296,24 @@ class ShellInstallerTest(InstallerTest):
         for path in managed:
             self.assertFalse(path.exists(), path)
 
+    @unittest.skipUnless(SYSTEM == "linux", "shared libraries of the Linux GUI")
+    def test_reports_missing_gui_libraries(self):
+        server = self.serve(build_release(self.directory, gui=True))
+        tools = self.directory / "tools"
+        write(tools / "ldd", "#!/bin/sh\n"
+              "printf '\\tlibxcb-cursor.so.0 => not found\\n'\n"
+              "printf '\\tlibc.so.6 => /lib/libc.so.6 (0x1)\\n'\n", mode=0o755)
+        home = self.directory / "home"
+        home.mkdir()
+        result = self.run_installer(
+            ["--version", VERSION, "--no-path-update"], HOME=home,
+            XDG_DATA_HOME=home / ".local" / "share", PULS_INSTALL_DIR=home / "bin",
+            PULS_INSTALL_REPOSITORY_URL=server.url,
+            PATH=f"{tools}{os.pathsep}{os.environ['PATH']}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("не хватает библиотек системы: libxcb-cursor.so.0.", result.stdout)
+        self.assertNotIn("libc.so.6", result.stdout)
+
     @unittest.skipUnless(SYSTEM == "darwin", "macOS bundle ownership")
     def test_preserves_unmanaged_macos_application(self):
         home = self.directory / "home"

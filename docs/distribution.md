@@ -61,6 +61,8 @@ application ID `io.github.cheviiot.puls`.
   ярлыком Start Menu;
 - `--no-shortcut` / `-NoShortcut` отключает ярлык; на macOS — установку
   `Puls.app`;
+- на Linux установщик называет библиотеки X11, которых не хватает
+  `puls-gui` в системе (чаще всего `libxcb-cursor0`);
 - повторный запуск обновляет Puls;
 - `--uninstall` / `-Uninstall` удаляет программы и управляемый ярлык.
 

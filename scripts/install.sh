@@ -280,6 +280,16 @@ install_linux_shortcut() {
   say "Puls добавлен в меню приложений."
 }
 
+# puls-gui uses the X11 libraries of the system, and a missing one keeps the
+# window from opening, so the installer names it.
+report_missing_libraries() {
+  command -v ldd > /dev/null 2>&1 || return 0
+  missing_libraries=$(ldd "$1" 2> /dev/null | awk '$2 == "=>" && $3 == "not" { printf "%s ", $1 }')
+  [ -n "$missing_libraries" ] || return 0
+  say "Графическому интерфейсу не хватает библиотек системы: ${missing_libraries% }."
+  say "Установите их менеджером пакетов (в Ubuntu и Debian, например, libxcb-cursor0); CLI работает без них."
+}
+
 install_macos_app() {
   app_source=$1
   [ "$install_shortcut" -eq 1 ] || return 0
@@ -681,7 +691,10 @@ say "Puls $version $install_action: $target_binary"
 add_path_configuration
 if [ "$asset_gui" -eq 1 ]; then
   case "$target_os" in
-    linux) install_linux_shortcut "$icon_path" "$target_gui" ;;
+    linux)
+      install_linux_shortcut "$icon_path" "$target_gui"
+      report_missing_libraries "$target_gui"
+      ;;
     darwin) install_macos_app "$app_path" ;;
   esac
 fi
