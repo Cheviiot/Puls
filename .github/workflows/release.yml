@@ -3,12 +3,19 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A manual run is a full preflight that publishes nothing, or, with
+  # publish on main, a release whose tag is created once every package is
+  # built.
   workflow_dispatch:
     inputs:
       version:
-        description: Версия для полного preflight без публикации, например 0.1.0
+        description: Версия выпуска, например 0.1.0
         required: true
         type: string
+      publish:
+        description: Опубликовать выпуск (только на main); тег v<версия> создаётся после сборки
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -27,13 +34,16 @@ jobs:
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.value }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Resolve version
         id: version
         env:
-          PREFLIGHT_VERSION: ${{ inputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
         shell: bash
         run: |
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
@@ -42,18 +52,42 @@ jobs:
               exit 1
             fi
             version=${GITHUB_REF_NAME#v}
+            publish=true
+          else
+            version=$INPUT_VERSION
+            publish=$INPUT_PUBLISH
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Версия должна иметь вид 1.2.3" >&2
+            exit 1
+          fi
+          if [[ "$publish" == "true" ]]; then
             if ! grep -Fq "## [$version]" CHANGELOG.md; then
               echo "В CHANGELOG.md нет раздела [$version]" >&2
               exit 1
             fi
-          else
-            version=$PREFLIGHT_VERSION
+            if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+              if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+                echo "Опубликовать выпуск можно только с main" >&2
+                exit 1
+              fi
+              # A published tag is never moved.
+              status=0
+              git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null || status=$?
+              if [[ "$status" -eq 0 ]]; then
+                echo "Тег v$version уже существует" >&2
+                exit 1
+              elif [[ "$status" -ne 2 ]]; then
+                echo "Не удалось проверить теги репозитория" >&2
+                exit 1
+              fi
+            fi
           fi
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Версия preflight должна иметь вид 1.2.3" >&2
-            exit 1
-          fi
-          echo "value=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "value=$version"
+            echo "tag=v$version"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
 
   # Builds, tests and packages the six desktop targets and the signed APK
   # exactly as CI does.
@@ -76,6 +110,8 @@ jobs:
     needs: [validate, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      TAG: ${{ needs.validate.outputs.tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -98,33 +134,57 @@ jobs:
         working-directory: dist
         run: sha256sum -c SHA256SUMS.txt
       - name: Attest artifacts
-        if: github.event_name == 'push'
+        if: needs.validate.outputs.publish == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: dist/SHA256SUMS.txt
-      - name: Create and upload draft
-        if: github.event_name == 'push'
+      # The release is created as a draft, completed and only then published.
+      # If any of it fails while the release is still a draft, the draft and
+      # the tag of a manual release are removed, so the run can be repeated.
+      - name: Create and publish release
+        if: needs.validate.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          tag_created=0
           release_created=0
           cleanup_failed_release() {
             status=$?
-            if [[ "$status" -ne 0 && "$release_created" -eq 1 ]]; then
-              gh release delete "$GITHUB_REF_NAME" --yes || true
+            if [[ "$status" -ne 0 ]]; then
+              unpublished=true
+              if [[ "$release_created" -eq 1 ]]; then
+                # A release that may have become public is left as it is.
+                if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft || true)" == "true" ]]; then
+                  gh release delete "$TAG" --yes || true
+                else
+                  unpublished=false
+                fi
+              fi
+              if [[ "$tag_created" -eq 1 && "$unpublished" == "true" ]]; then
+                git push origin --delete "refs/tags/$TAG" || true
+              fi
             fi
             exit "$status"
           }
           trap cleanup_failed_release EXIT
-          gh release create "$GITHUB_REF_NAME" --draft --verify-tag --generate-notes --title "Puls $GITHUB_REF_NAME"
+          # A manual release tags the commit it built; a tag pushed by the
+          # workflow token starts no other workflow.
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$TAG" --message "Puls $TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+            tag_created=1
+          fi
+          gh release create "$TAG" --draft --verify-tag --generate-notes --title "Puls $TAG"
           release_created=1
           for asset_path in dist/*; do
             if [[ "${asset_path##*/}" != "install.ps1" ]]; then
-              gh release upload "$GITHUB_REF_NAME" "$asset_path"
+              gh release upload "$TAG" "$asset_path"
             fi
           done
-          release_id=$(gh release view "$GITHUB_REF_NAME" --json databaseId --jq .databaseId)
+          release_id=$(gh release view "$TAG" --json databaseId --jq .databaseId)
           curl --fail-with-body --silent --show-error \
             --request POST \
             --header "Accept: application/vnd.github+json" \
@@ -140,11 +200,8 @@ jobs:
             echo "install.ps1 опубликован с неверным Content-Type: $content_type" >&2
             exit 1
           fi
+          # Installers download the latest release. GitHub would otherwise
+          # pick it by version, and the numbering restarted below earlier
+          # versions.
+          gh release edit "$TAG" --draft=false --latest
           trap - EXIT
-      # Installers download the latest release. GitHub would otherwise pick
-      # it by version, and the numbering restarted below earlier versions.
-      - name: Publish release
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest
