@@ -32,8 +32,9 @@
       },
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "cl",
-        "VCPKG_TARGET_TRIPLET": "x64-windows-static",
-        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
+        "VCPKG_HOST_TRIPLET": "x64-windows-static-md",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
       }
     },
     {
@@ -72,7 +73,7 @@
     },
     {
       "name": "windows-debug",
-      "displayName": "Windows Debug (MSVC, static vcpkg)",
+      "displayName": "Windows Debug (MSVC, vcpkg, shared Qt)",
       "inherits": "windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -80,7 +81,7 @@
     },
     {
       "name": "windows-release",
-      "displayName": "Windows Release (MSVC, static vcpkg)",
+      "displayName": "Windows Release (MSVC, vcpkg, shared Qt)",
       "inherits": "windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"

@@ -72,6 +72,34 @@ add_library(Puls::application ALIAS puls_application)
 target_link_libraries(puls_application PUBLIC Puls::service Puls::yandex Puls::speedtestru)
 puls_configure_target(puls_application)
 
+# Dashboard state and behavior shared by graphical frontends; no toolkit.
+add_library(puls_gui_model STATIC puls/gui/model.cpp)
+add_library(Puls::gui_model ALIAS puls_gui_model)
+target_link_libraries(puls_gui_model PUBLIC Puls::application)
+puls_configure_target(puls_gui_model)
+
+if(PULS_BUILD_GUI)
+    # Qt Quick dashboard over the dashboard model.
+    add_library(puls_gui STATIC
+        puls/gui/controller.cpp
+        puls/gui/run.cpp
+        puls/gui/settings_store.cpp)
+    add_library(Puls::gui ALIAS puls_gui)
+    set_target_properties(puls_gui PROPERTIES AUTOMOC ON)
+    target_link_libraries(puls_gui PUBLIC
+        Puls::gui_model Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    qt_add_resources(puls_gui "puls_gui_resources"
+        PREFIX "/puls"
+        BASE puls/gui
+        FILES
+            puls/gui/assets/Icon.png
+            puls/gui/qml/InfoCard.qml
+            puls/gui/qml/Main.qml
+            puls/gui/qml/MetricCard.qml
+            puls/gui/qml/SettingsDialog.qml)
+    puls_configure_target(puls_gui)
+endif()
+
 # Terminal output, colors, progress and the interactive menu.
 add_library(puls_ui STATIC
     puls/ui/select.cpp
@@ -93,6 +121,10 @@ puls_configure_target(puls_cli)
 add_executable(puls puls/cli/main.cpp)
 target_link_libraries(puls PRIVATE Puls::cli)
 target_compile_definitions(puls PRIVATE PULS_VERSION="${PULS_VERSION}")
+if(PULS_BUILD_GUI)
+    target_link_libraries(puls PRIVATE Puls::gui)
+    target_compile_definitions(puls PRIVATE PULS_HAS_GUI)
+endif()
 if(WIN32)
     target_link_libraries(puls PRIVATE shell32)
 endif()

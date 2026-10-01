@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 option(PULS_BUILD_TESTS "Build unit and mock-network tests" ON)
+option(PULS_BUILD_GUI "Build the Qt Quick graphical interface" ON)
 option(PULS_LIVE_TESTS "Build tests that contact the real measurement services" OFF)
 option(PULS_SYSTEM_TLS_TESTS "Build a smoke test for the platform certificate store" OFF)
 option(PULS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
@@ -14,6 +15,9 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS version")
 # vcpkg reads manifest features while processing project().
 if(PULS_BUILD_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES "tests")
+endif()
+if(PULS_BUILD_GUI)
+    list(APPEND VCPKG_MANIFEST_FEATURES "gui")
 endif()
 
 project(Puls
@@ -40,6 +44,9 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 find_package(OpenSSL 3.0 REQUIRED)
 find_package(Boost 1.83 CONFIG REQUIRED COMPONENTS json)
+if(PULS_BUILD_GUI)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+endif()
 
 add_subdirectory(src)
 

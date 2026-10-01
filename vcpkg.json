@@ -28,6 +28,56 @@
       "dependencies": [
         "gtest"
       ]
+    },
+    "gui": {
+      "description": "Qt Quick graphical interface",
+      "dependencies": [
+        {
+          "name": "dbus",
+          "default-features": false,
+          "platform": "linux"
+        },
+        {
+          "name": "fontconfig",
+          "default-features": false,
+          "platform": "linux"
+        },
+        {
+          "name": "qtbase",
+          "default-features": false,
+          "features": [
+            "freetype",
+            "gui",
+            "harfbuzz",
+            "png",
+            "thread",
+            {
+              "name": "dbus",
+              "platform": "linux"
+            },
+            {
+              "name": "fontconfig",
+              "platform": "linux"
+            },
+            {
+              "name": "opengl",
+              "platform": "!ios"
+            },
+            {
+              "name": "xcb",
+              "platform": "linux"
+            },
+            {
+              "name": "xkb",
+              "platform": "linux"
+            }
+          ]
+        },
+        {
+          "name": "qtdeclarative",
+          "default-features": false
+        }
+      ]
     }
   }
 }

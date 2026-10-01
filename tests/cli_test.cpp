@@ -7,6 +7,8 @@
 #include "puls/ui/select.hpp"
 #include "puls/ui/terminal.hpp"
 
+#include "support/fake_backend.hpp"
+
 #include <boost/json/serialize.hpp>
 #include <gtest/gtest.h>
 
@@ -22,61 +24,7 @@ using namespace std::chrono_literals;
 using service::ServiceId;
 using service::Status;
 
-class FakeBackend final : public service::Backend, public service::ConnectionInfoBackend {
-public:
-    explicit FakeBackend(ServiceId service) : service_(service) {}
-
-    [[nodiscard]] ServiceId id() const override { return service_; }
-    [[nodiscard]] service::Capability capabilities() const override {
-        return service::Capability::ping | service::Capability::download |
-               service::Capability::upload;
-    }
-    Result<service::Server> select_server(const Context&) override {
-        ++select_calls;
-        if (select_error) {
-            return select_error;
-        }
-        return service::Server{"mock.example", "Владивосток", {}};
-    }
-    Result<service::PingResult> ping(const Context&) override {
-        if (ping_error) {
-            return ping_error;
-        }
-        return service::stats_with_method({10, 12, 11}, "median");
-    }
-    service::ThroughputOutcome download(const Context&, const service::MeasurementConfig&,
-                                        const service::ProgressFn& progress) override {
-        if (progress) {
-            progress(service::ThroughputProgress{80, 1000, 500ms, 2});
-        }
-        service::ThroughputResult result{100, 12'500'000, 1s, 2, 0, {}};
-        return {result, download_error};
-    }
-    service::ThroughputOutcome upload(const Context&, const service::MeasurementConfig&,
-                                      const service::ProgressFn&) override {
-        service::ThroughputResult result{50, 6'250'000, 1s, 1, 0, {}};
-        return {result, upload_error};
-    }
-    Result<service::ConnectionInfo> detect_connection(const Context&) override {
-        ++connection_calls;
-        if (connection_error) {
-            return connection_error;
-        }
-        return connection;
-    }
-
-    Error select_error;
-    Error ping_error;
-    Error download_error;
-    Error upload_error;
-    service::ConnectionInfo connection;
-    Error connection_error;
-    std::atomic<int> connection_calls{0};
-    std::atomic<int> select_calls{0};
-
-private:
-    ServiceId service_;
-};
+using testing::FakeBackend;
 
 struct Fixture {
     Fixture() {
