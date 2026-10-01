@@ -8,9 +8,9 @@ in sorted order. The assemble command checks the archives of a release,
 writes RELEASE_MANIFEST.json (schema 3) and SHA256SUMS.txt, and copies the
 installers next to them.
 
-    release.py package --version 0.4.0 --os linux --arch amd64 \\
+    release.py package --version 0.1.0 --os linux --arch amd64 \\
         --stage stage --output dist
-    release.py assemble --version 0.4.0 --output dist
+    release.py assemble --version 0.1.0 --output dist
 """
 
 import argparse

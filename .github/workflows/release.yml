@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Версия для полного preflight без публикации, например 0.4.0
+        description: Версия для полного preflight без публикации, например 0.1.0
         required: true
         type: string
 
@@ -141,8 +141,10 @@ jobs:
             exit 1
           fi
           trap - EXIT
+      # Installers download the latest release. GitHub would otherwise pick
+      # it by version, and the numbering restarted below earlier versions.
       - name: Publish release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$GITHUB_REF_NAME" --draft=false
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

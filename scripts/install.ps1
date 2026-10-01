@@ -199,7 +199,7 @@ if ($Uninstall) {
     }
 
     Remove-PulsShortcut
-    # Versions before 0.4.0 kept the shortcut icon next to puls.exe.
+    # The Go versions kept the shortcut icon next to puls.exe.
     $legacyIcon = Join-Path $InstallDir "Puls.ico"
     if (Test-Path -LiteralPath $legacyIcon -PathType Leaf) {
         Remove-Item -Force -LiteralPath $legacyIcon
@@ -417,7 +417,7 @@ try {
             $shortcut.Description = $ShortcutDescription
             $shortcut.Save()
         }
-        # Versions before 0.4.0 kept the shortcut icon next to puls.exe.
+        # The Go versions kept the shortcut icon next to puls.exe.
         $legacyIcon = Join-Path $InstallDir "Puls.ico"
         if (Test-Path -LiteralPath $legacyIcon -PathType Leaf) {
             Remove-Item -Force -LiteralPath $legacyIcon

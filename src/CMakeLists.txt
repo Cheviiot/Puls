@@ -159,11 +159,11 @@ if(PULS_BUILD_GUI)
     elseif(ANDROID)
         # The Android paths below are plain JSON strings.
         qt_policy(SET QTP0002 NEW)
+        # Android installs only a greater version code over the installed app.
+        # The version numbering restarted at 0.1.0 after 0.3.3, whose code was
+        # 3003, so the codes start at 10000.
         math(EXPR puls_version_code
-            "${PULS_VERSION_MAJOR} * 1000000 + ${PULS_VERSION_MINOR} * 1000 + ${PULS_VERSION_PATCH}")
-        if(puls_version_code LESS 1)
-            set(puls_version_code 1)
-        endif()
+            "10000 + ${PULS_VERSION_MAJOR} * 1000000 + ${PULS_VERSION_MINOR} * 1000 + ${PULS_VERSION_PATCH}")
         # The package name and the signing key of the earlier releases let
         # the APK update the installed app.
         set_target_properties(puls-gui PROPERTIES

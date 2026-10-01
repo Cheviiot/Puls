@@ -53,7 +53,8 @@ puls version
 ```
 
 `--connections=0` — нативный автоматический режим. `--server` допустим только
-для отдельного `speedtest`. Удалённый v0.1 flag `--ip` не восстанавливать.
+для отдельного `speedtest`. Удалённый ещё в версиях на Go flag `--ip` не
+восстанавливать.
 
 Без аргументов TTY получает выбор сервиса, pipe запускает Yandex. Human output
 идёт в `stdout`, verbose — в `stderr`. JSON не содержит ANSI или progress.
@@ -271,6 +272,11 @@ PATH/update/uninstall, управляемые shortcuts и ASCII without BOM д�
 `install.ps1`. Изменения архивов, manifest и установщиков проверяй
 `python3 -m unittest discover -s scripts/tests`. Android APK
 подписывается только секретами GitHub Actions; keystore не добавлять в Git.
+
+Версию повышай на один шаг: исправления — patch, новые возможности — minor;
+1.0.0 — только по решению владельца. Нумерация начата заново с 0.1.0 после
+удалённых выпусков 0.1.0–0.3.3 на Go, поэтому version code Android содержит
+смещение 10000 (`src/CMakeLists.txt`); не убирай его.
 
 ## Definition of Done
 
