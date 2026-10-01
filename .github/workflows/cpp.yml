@@ -155,8 +155,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Bootstrap vcpkg
         if: runner.os != 'Windows'
-        # The statically linked musl build of vcpkg runs with the old glibc.
-        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics ${{ matrix.container && ''-musl'' || '''' }}'
+        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
       - name: Bootstrap vcpkg (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
