@@ -157,13 +157,15 @@ if(PULS_BUILD_GUI)
     elseif(APPLE)
         puls_configure_macos_bundle(puls-gui)
     elseif(ANDROID)
+        # The Android paths below are plain JSON strings.
+        qt_policy(SET QTP0002 NEW)
         math(EXPR puls_version_code
             "${PULS_VERSION_MAJOR} * 1000000 + ${PULS_VERSION_MINOR} * 1000 + ${PULS_VERSION_PATCH}")
         if(puls_version_code LESS 1)
             set(puls_version_code 1)
         endif()
-        # The package name and the signing key of the Go version let the
-        # APK update it in place.
+        # The package name and the signing key of the earlier releases let
+        # the APK update the installed app.
         set_target_properties(puls-gui PROPERTIES
             QT_ANDROID_PACKAGE_NAME io.github.cheviiot.puls
             QT_ANDROID_APP_NAME Puls
@@ -178,15 +180,18 @@ if(PULS_BUILD_GUI)
         target_link_options(puls-gui PRIVATE "LINKER:-z,max-page-size=16384")
     endif()
     puls_configure_target(puls-gui)
-    install(TARGETS puls-gui
-        RUNTIME DESTINATION "${PULS_INSTALL_BINDIR}"
-        BUNDLE DESTINATION "${PULS_INSTALL_BUNDLEDIR}")
+    # On Android the APK is the package, so nothing is installed.
+    if(NOT ANDROID)
+        install(TARGETS puls-gui
+            RUNTIME DESTINATION "${PULS_INSTALL_BINDIR}"
+            BUNDLE DESTINATION "${PULS_INSTALL_BUNDLEDIR}")
+    endif()
     if(APPLE)
         # Stripping during installation invalidates the linker signature.
         install(CODE "execute_process(COMMAND codesign --force --sign -
             \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${PULS_INSTALL_BUNDLEDIR}/Puls.app\"
             COMMAND_ERROR_IS_FATAL ANY)")
-    elseif(UNIX)
+    elseif(UNIX AND NOT ANDROID)
         if(PULS_PORTABLE_INSTALL)
             # The installer creates the menu entry with this icon.
             install(FILES puls/gui/assets/Icon.png DESTINATION assets)
