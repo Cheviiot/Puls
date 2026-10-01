@@ -32,8 +32,9 @@ GUI сохраняет тему, сервис, профиль, длительн�
 ## Переход на C++
 
 Проект переносится с Go на C++20 с CMake и vcpkg. C++ версия уже содержит
-CLI, application runner, engine и оба протокола; GUI, Android-приложение и
-release builder пока остаются в Go и переносятся следующими этапами.
+CLI, GUI на Qt Quick, application runner, engine и оба протокола; сборка
+Android-приложения и release builder пока остаются в Go и переносятся
+следующими этапами.
 
 | Слой | C++ | Go |
 | --- | --- | --- |
@@ -46,7 +47,8 @@ release builder пока остаются в Go и переносятся сле
 | Терминал | `src/puls/ui` | `internal/ui` |
 | HTTP, WebSocket, TLS | `src/puls/net` | стандартная библиотека Go |
 | Context, ошибки, JSON, IP | `src/puls/core` | стандартная библиотека Go |
-| GUI и Android | — | `internal/gui` |
+| GUI | `src/puls/gui` | `internal/gui` |
+| Сборка Android | — | `cmd/release`, Fyne |
 | Release builder | — | `cmd/release` |
 
 Пока обе реализации существуют, изменения протоколов, CLI и JSON вносятся в
@@ -66,6 +68,13 @@ release builder пока остаются в Go и переносятся сле
   хранилище: bundle Linux/BSD/Android, anchors и trust settings macOS,
   хранилища `ROOT`/`CA` Windows.
 - `measure::run` запускает поток на worker и сохраняет инварианты engine.
+- GUI построен на Qt 6 Quick (QML, стиль Material). Состояние, тексты и
+  правила dashboard находятся в Qt-независимой `gui::Dashboard` и
+  тестируются во всех конфигурациях; `DashboardController` запускает runner в
+  рабочем потоке и передаёт события в UI-поток queued-вызовами. Настройки
+  хранятся в `QSettings` с теми же ключами, что и в Go-версии.
+- Qt из vcpkg линкуется динамически (LGPL; плагины платформы и QML
+  загружаются во время работы); остальные зависимости — статически.
 - JSON schema 1 кодируется побайтно совместимо с Go (`encoding/json` с
   отступом в два пробела и HTML-экранированием).
 - Тесты используют GoogleTest и локальные HTTPS/WSS серверы с временными
@@ -82,3 +91,7 @@ release builder пока остаются в Go и переносятся сле
   хранилище; автоматическая загрузка отсутствующих корней Windows не
   выполняется.
 - Минимальная macOS — 13.3 из-за `std::to_chars` для чисел с плавающей точкой.
+- Windows-сборка использует динамическую CRT (`x64-windows-static-md`), так
+  как Qt поставляется в виде DLL.
+- Qt из vcpkg на Linux собирается с платформой X11; в сеансах Wayland окно
+  работает через XWayland.

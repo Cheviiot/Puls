@@ -8,14 +8,23 @@
 
 ## Подготовка среды
 
-Puls переносится с Go на C++20. Новая реализация CLI, протоколов и engine
-находится в `src/`; GUI, Android и release builder пока собираются из Go.
+Puls переносится с Go на C++20. Новая реализация CLI, GUI на Qt Quick,
+протоколов и engine находится в `src/`; Android и release builder пока
+собираются из Go.
 
 ### C++
 
 Нужны CMake 3.25+, Ninja, компилятор C++20 (GCC 13+, Clang 18+, Apple Clang
 из Xcode 16+ или MSVC 2022) и [vcpkg](https://github.com/microsoft/vcpkg).
-Зависимости из `vcpkg.json` устанавливаются при первой конфигурации.
+Зависимости из `vcpkg.json` устанавливаются при первой конфигурации; сборка Qt
+занимает заметное время, без GUI проект собирается с `-DPULS_BUILD_GUI=OFF`.
+На Linux для Qt из vcpkg нужны системные библиотеки X11:
+
+```bash
+sudo apt-get install '^libxcb.*-dev' libx11-xcb-dev libglu1-mesa-dev libxrender-dev \
+  libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libegl1-mesa-dev autoconf \
+  autoconf-archive automake libtool
+```
 
 ```bash
 git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
@@ -28,11 +37,14 @@ ctest --preset debug
 ```
 
 На Windows используйте preset `windows-debug` в Developer PowerShell для
-Visual Studio. Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3 и
-GoogleTest через preset `system-debug`:
+Visual Studio. Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3,
+Qt 6.4+ и GoogleTest через preset `system-debug`:
 
 ```bash
-sudo apt-get install cmake ninja-build g++ libboost-dev libboost-json-dev libssl-dev libgtest-dev
+sudo apt-get install cmake ninja-build g++ libboost-dev libboost-json-dev libssl-dev \
+  libgtest-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
+  qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-window \
+  qml6-module-qtquick-templates qml6-module-qtqml-workerscript qt6-qpa-plugins
 cmake --preset system-debug
 cmake --build --preset system-debug
 ctest --preset system-debug
@@ -54,7 +66,8 @@ go test ./...
 
 ## Перед pull request
 
-Для C++:
+Для C++ (изменения QML проверяйте и по снимкам экрана:
+`PULS_GUI_SCREENSHOTS=<каталог> ./build/debug/tests/puls_gui_tests`):
 
 ```bash
 git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 -i

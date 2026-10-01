@@ -54,19 +54,21 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 
 ## Сборка из исходников
 
-Puls переносится на C++20. Новая версия CLI собирается CMake и
-[vcpkg](https://github.com/microsoft/vcpkg):
+Puls переносится на C++20. Новая версия CLI и GUI на Qt Quick собирается
+CMake и [vcpkg](https://github.com/microsoft/vcpkg):
 
 ```sh
 export VCPKG_ROOT=~/vcpkg
 cmake --preset release
 cmake --build --preset release
 ctest --preset release
-./build/release/src/puls help
+./build/release/src/puls gui
 ```
 
-На Windows используйте preset `windows-release` в Developer PowerShell для
-Visual Studio. GUI и Android пока собираются из Go-версии; подробности — в
+Первая конфигурация собирает Qt и занимает заметное время; только CLI
+собирается с `-DPULS_BUILD_GUI=OFF`. На Windows используйте preset
+`windows-release` в Developer PowerShell для Visual Studio. Android-приложение
+пока собирается из Go-версии; подробности — в
 [CONTRIBUTING](.github/CONTRIBUTING.md).
 
 Puls не отправляет телеметрию и не сохраняет IP, результаты измерений, JWT или

@@ -80,15 +80,17 @@ global output, setter вида `SetVerbose` или UI в `MeasurementConfig`. О
 ## C++ версия
 
 Проект переносится на C++20: CMake ≥ 3.25, vcpkg manifest, Boost.Asio/Beast/JSON,
-OpenSSL 3 и GoogleTest. `src/puls` уже содержит CLI, application, engine и оба
-протокола; GUI, Android и release builder пока остаются в Go. Пока существуют
-обе реализации, изменения протоколов, CLI и JSON вносятся в обе либо
-фиксируются как расхождение в `docs/architecture.md`.
+OpenSSL 3, Qt 6 Quick и GoogleTest. `src/puls` уже содержит CLI, GUI,
+application, engine и оба протокола; сборка Android и release builder пока
+остаются в Go. Пока существуют обе реализации, изменения протоколов, CLI и
+JSON вносятся в обе либо фиксируются как расхождение в `docs/architecture.md`.
 
 - `src/puls/core`: `Context`/`CancelScope`, `Error`/`Result`, JSON, IP, text;
 - `src/puls/net`: HTTP/1.1, WebSocket и TLS с системными корнями;
 - `src/puls/{measure,service,application,ui,cli}` и
   `src/puls/service/{yandex,speedtestru}` сохраняют границы Go-пакетов выше;
+- `src/puls/gui`: `model` — состояние и поведение dashboard без Qt;
+  `controller`, `run` и `qml/` — тонкий слой Qt Quick над моделью;
 - `tests`: GoogleTest, `tests/support` — локальные HTTPS/WSS mocks.
 
 Правила C++:
@@ -193,9 +195,14 @@ golden tests.
 
 ## GUI
 
-- Используй Fyne v2 и обновляй widgets из goroutine только через `fyne.Do`.
-- CLI и GUI обязаны вызывать `internal/application.Runner`; не дублируй
-  orchestration, retry или преобразование результатов во frontend.
+- C++: Qt 6 Quick/QML со стилем Material. Логику и тексты держи в
+  `puls::gui::Dashboard`, QML только отображает свойства и вызывает методы
+  `DashboardController`. События runner приходят из рабочего потока и
+  передаются в UI-поток только queued-вызовом; Qt-типы между потоками не
+  передаются.
+- Go: используй Fyne v2 и обновляй widgets из goroutine только через `fyne.Do`.
+- CLI и GUI обязаны вызывать `app::Runner` (`internal/application.Runner` в Go);
+  не дублируй orchestration, retry или преобразование результатов во frontend.
 - Сохраняй только тему, сервис, профиль, duration, connections, phase и размер
   окна. Не сохраняй IP, ISP, server, результаты, warnings, logs и credentials.
 - Держи один mobile-first dashboard без gauges и истории: cyan accent,
@@ -243,9 +250,14 @@ git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 --dry-run --Werror
 ```
 
 Без vcpkg используй preset `system-debug` с системными Boost ≥ 1.83,
-OpenSSL ≥ 3.0 и GTest; санитайзеры включает `-DPULS_SANITIZERS=...`. Live tests
-собираются с `-DPULS_LIVE_TESTS=ON`. Workflow `cpp.yml` обязан проходить на
-Linux GCC/Clang, ASan+UBSan, TSan, macOS и Windows MSVC.
+OpenSSL ≥ 3.0, Qt ≥ 6.4 и GTest; санитайзеры включает `-DPULS_SANITIZERS=...`,
+сборку без Qt — `-DPULS_BUILD_GUI=OFF`. GUI-тесты работают с
+`QT_QPA_PLATFORM=offscreen`; `PULS_GUI_SCREENSHOTS=<dir>` сохраняет снимки
+экрана для проверки вёрстки. Live tests собираются с `-DPULS_LIVE_TESTS=ON`.
+Workflow `cpp.yml` обязан проходить на Linux GCC/Clang, ASan+UBSan, TSan, macOS
+и Windows MSVC. Qt из vcpkg линкуется динамически (overlay triplets в
+`cmake/triplets`). TSan собирается без Qt: неинструментированный Qt
+синхронизирует очередь событий через futex, и TSan даёт ложные срабатывания.
 
 Network tests используют local HTTP/WebSocket mocks и покрывают success, exact
 bytes, malformed frames/JSON, 401/403/5xx, disconnect, partial success,
