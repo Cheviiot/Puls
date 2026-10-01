@@ -27,7 +27,8 @@ irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 ```
 
 Установщик добавляет `puls` в `PATH` и создаёт ярлык приложения. Android APK
-доступен в [последнем релизе](https://github.com/Cheviiot/Puls/releases/latest).
+для Android 9 и новее доступен в
+[последнем релизе](https://github.com/Cheviiot/Puls/releases/latest).
 
 > Для обновления повторно выполните ту же команду установки.
 
@@ -54,8 +55,8 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 
 ## Сборка из исходников
 
-Puls переносится на C++20. Новая версия CLI и GUI на Qt Quick собирается
-CMake и [vcpkg](https://github.com/microsoft/vcpkg):
+Puls написан на C++20. CLI и GUI на Qt Quick собираются CMake и
+[vcpkg](https://github.com/microsoft/vcpkg):
 
 ```sh
 export VCPKG_ROOT=~/vcpkg
