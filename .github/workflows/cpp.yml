@@ -5,6 +5,13 @@ on:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+  # The release workflow builds and tests the packages with this workflow.
+  workflow_call:
+    inputs:
+      version:
+        description: Version of the packages
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,6 +42,43 @@ jobs:
       - name: Check formatting
         run: git ls-files -z '*.cpp' '*.hpp' | xargs -0 clang-format-18 --dry-run --Werror
 
+  release-tools:
+    name: Выпуск и установщики · ${{ matrix.name }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-24.04
+            python: python3
+          - name: macOS
+            os: macos-15
+            python: python3
+          - name: Windows
+            os: windows-2025
+            python: python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check scripts and workflows
+        if: runner.os == 'Linux'
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          shellcheck scripts/install.sh .github/scripts/*.sh
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --location --silent --show-error --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" .github/workflows/*.yml
+      - name: Test the release tool and installers
+        run: ${{ matrix.python }} -m unittest discover -s scripts/tests -v
+
   build:
     name: ${{ matrix.name }}
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
@@ -49,12 +93,16 @@ jobs:
       matrix:
         include:
           - name: Linux · x64 · GUI
+            package-os: linux
+            package-arch: amd64
             os: ubuntu-24.04
             container: quay.io/pypa/manylinux_2_28_x86_64
             preset: release
             triplet: x64-linux
             gui: "ON"
           - name: Linux · ARM64 · GUI
+            package-os: linux
+            package-arch: arm64
             os: ubuntu-24.04-arm
             container: quay.io/pypa/manylinux_2_28_aarch64
             preset: release
@@ -82,22 +130,32 @@ jobs:
             cxx: clang++-18
             gui: "OFF"
           - name: macOS · ARM64 · GUI
+            package-os: darwin
+            package-arch: arm64
             os: macos-15
             preset: release
             triplet: arm64-osx
             gui: "ON"
           - name: macOS · x64 · GUI
+            package-os: darwin
+            package-arch: amd64
             os: macos-15-intel
             preset: release
             triplet: x64-osx
             gui: "ON"
           - name: Windows · x64 · GUI
+            package-os: windows
+            package-arch: amd64
+            python: python
             os: windows-2025
             preset: windows-release
             triplet: x64-windows-static-release
             msvc-arch: x64
             gui: "ON"
           - name: Windows · ARM64
+            package-os: windows
+            package-arch: arm64
+            python: python
             os: windows-11-arm
             preset: windows-arm64-release
             triplet: arm64-windows-static-release
@@ -176,7 +234,10 @@ jobs:
         shell: bash
         run: touch "${RUNNER_TEMP//\\//}/vcpkg-cache-restored"
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON -DPULS_BUILD_GUI=${{ matrix.gui }} ${{ env.VCPKG_CONFIGURE_ARGS }}
+        run: >-
+          cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON
+          -DPULS_BUILD_GUI=${{ matrix.gui }} -DPULS_VERSION=${{ inputs.version || 'dev' }}
+          -DPULS_PORTABLE_INSTALL=${{ matrix.package-os && 'ON' || 'OFF' }} ${{ env.VCPKG_CONFIGURE_ARGS }}
       - name: Find new vcpkg packages
         id: vcpkg-new
         if: always()
@@ -199,3 +260,21 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
+      - name: Package
+        if: matrix.package-os != ''
+        shell: bash
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          cmake --install "build/${{ matrix.preset }}" --prefix "$stage" --strip
+          ${{ matrix.python || 'python3' }} scripts/release.py package \
+            --version "${{ inputs.version || 'dev' }}" \
+            --os ${{ matrix.package-os }} --arch ${{ matrix.package-arch }} \
+            --stage "$stage" --output dist
+      - name: Upload package
+        if: matrix.package-os != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-${{ matrix.package-os }}-${{ matrix.package-arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7

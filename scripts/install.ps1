@@ -15,8 +15,10 @@ $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor `
     [Net.SecurityProtocolType]::Tls12
 
+# Windows PowerShell 5 reads scripts without a BOM in the ANSI code page, so
+# the script stays ASCII and keeps its Russian messages as UTF-8 in Base64.
 $MessageCatalog = @{
-    Usage = "0KPRgdGC0LDQvdC+0LLQutCwINC4INGD0LTQsNC70LXQvdC40LUgUHVscyDRh9C10YDQtdC3IEdpdEh1YiBSZWxlYXNlcwoK0JjRgdC/0L7Qu9GM0LfQvtCy0LDQvdC40LU6CiAgLlxpbnN0YWxsLnBzMSBbLVZlcnNpb24gPHZhbHVlPl0gWy1JbnN0YWxsRGlyIDxwYXRoPl0gWy1Ob1BhdGhVcGRhdGVdIFstTm9TaG9ydGN1dF0KICAuXGluc3RhbGwucHMxIC1Vbmluc3RhbGwgWy1JbnN0YWxsRGlyIDxwYXRoPl0gWy1Ob1BhdGhVcGRhdGVdIFstTm9TaG9ydGN1dF0KCtCf0LDRgNCw0LzQtdGC0YDRizoKICAtVmVyc2lvbiA8dmFsdWU+ICAgICAg0YPRgdGC0LDQvdC+0LLQuNGC0Ywg0LrQvtC90LrRgNC10YLQvdGD0Y4g0LLQtdGA0YHQuNGOLCDQvdCw0L/RgNC40LzQtdGAIDAuMy4wCiAgLUluc3RhbGxEaXIgPHBhdGg+ICAgINC60LDRgtCw0LvQvtCzINGD0YHRgtCw0L3QvtCy0LrQuCDCtyDQv9C+INGD0LzQvtC70YfQsNC90LjRjiAlTE9DQUxBUFBEQVRBJVxQcm9ncmFtc1xQdWxzXGJpbgogIC1Ob1BhdGhVcGRhdGUgICAgICAgICDQvdC1INC00L7QsdCw0LLQu9GP0YLRjCDQutCw0YLQsNC70L7QsyDRg9GB0YLQsNC90L7QstC60Lgg0LIg0L/QvtC70YzQt9C+0LLQsNGC0LXQu9GM0YHQutC40LkgUEFUSAogIC1Ob1Nob3J0Y3V0ICAgICAgICAgICDQvdC1INGB0L7Qt9C00LDQstCw0YLRjCDRj9GA0LvRi9C6INCz0YDQsNGE0LjRh9C10YHQutC+0LPQviDQv9GA0LjQu9C+0LbQtdC90LjRjwogIC1Vbmluc3RhbGwgICAgICAgICAgICDRg9C00LDQu9C40YLRjCBQdWxzINC4INC30LDQv9C40YHRjCDQuNC3INC/0L7Qu9GM0LfQvtCy0LDRgtC10LvRjNGB0LrQvtCz0L4gUEFUSAogIC1IZWxwICAgICAgICAgICAgICAgICDQv9C+0LrQsNC30LDRgtGMINGN0YLRgyDRgdC/0YDQsNCy0LrRgwo="
+    Usage = "0KPRgdGC0LDQvdC+0LLQutCwINC4INGD0LTQsNC70LXQvdC40LUgUHVscyDRh9C10YDQtdC3IEdpdEh1YiBSZWxlYXNlcwoK0JjRgdC/0L7Qu9GM0LfQvtCy0LDQvdC40LU6CiAgLlxpbnN0YWxsLnBzMSBbLVZlcnNpb24gPHZhbHVlPl0gWy1JbnN0YWxsRGlyIDxwYXRoPl0gWy1Ob1BhdGhVcGRhdGVdIFstTm9TaG9ydGN1dF0KICAuXGluc3RhbGwucHMxIC1Vbmluc3RhbGwgWy1JbnN0YWxsRGlyIDxwYXRoPl0gWy1Ob1BhdGhVcGRhdGVdIFstTm9TaG9ydGN1dF0KCtCf0LDRgNCw0LzQtdGC0YDRizoKICAtVmVyc2lvbiA8dmFsdWU+ICAgICAg0YPRgdGC0LDQvdC+0LLQuNGC0Ywg0LrQvtC90LrRgNC10YLQvdGD0Y4g0LLQtdGA0YHQuNGOLCDQvdCw0L/RgNC40LzQtdGAIDAuNC4wCiAgLUluc3RhbGxEaXIgPHBhdGg+ICAgINC60LDRgtCw0LvQvtCzINGD0YHRgtCw0L3QvtCy0LrQuCDCtyDQv9C+INGD0LzQvtC70YfQsNC90LjRjiAlTE9DQUxBUFBEQVRBJVxQcm9ncmFtc1xQdWxzXGJpbgogIC1Ob1BhdGhVcGRhdGUgICAgICAgICDQvdC1INC00L7QsdCw0LLQu9GP0YLRjCDQutCw0YLQsNC70L7QsyDRg9GB0YLQsNC90L7QstC60Lgg0LIg0L/QvtC70YzQt9C+0LLQsNGC0LXQu9GM0YHQutC40LkgUEFUSAogIC1Ob1Nob3J0Y3V0ICAgICAgICAgICDQvdC1INGB0L7Qt9C00LDQstCw0YLRjCDRj9GA0LvRi9C6IFB1bHMg0LIg0LzQtdC90Y4gwqvQn9GD0YHQusK7CiAgLVVuaW5zdGFsbCAgICAgICAgICAgINGD0LTQsNC70LjRgtGMIFB1bHMg0Lgg0LfQsNC/0LjRgdGMINC40Lcg0L/QvtC70YzQt9C+0LLQsNGC0LXQu9GM0YHQutC+0LPQviBQQVRICiAgLUhlbHAgICAgICAgICAgICAgICAgINC/0L7QutCw0LfQsNGC0Ywg0Y3RgtGDINGB0L/RgNCw0LLQutGDCg=="
     WindowsOnly = "0KPRgdGC0LDQvdC+0LLRidC40LogaW5zdGFsbC5wczEg0L/RgNC10LTQvdCw0LfQvdCw0YfQtdC9INGC0L7Qu9GM0LrQviDQtNC70Y8gV2luZG93cy4="
     LocalAppDataMissing = "0J3QtSDRg9C00LDQu9C+0YHRjCDQvtC/0YDQtdC00LXQu9C40YLRjCBMT0NBTEFQUERBVEE7INGD0LrQsNC20LjRgtC1IC1JbnN0YWxsRGlyLg=="
     RemoveTargetDirectory = "ezB9INGP0LLQu9GP0LXRgtGB0Y8g0LrQsNGC0LDQu9C+0LPQvtC8OyDRg9C00LDQu9C10L3QuNC1INC+0YHRgtCw0L3QvtCy0LvQtdC90L4u"
@@ -25,6 +27,7 @@ $MessageCatalog = @{
     PathRemoved = "0JrQsNGC0LDQu9C+0LMg0YPQtNCw0LvRkdC9INC40Lcg0L/QvtC70YzQt9C+0LLQsNGC0LXQu9GM0YHQutC+0LPQviBQQVRILg=="
     RepositoryHTTPS = "0JjRgdGC0L7Rh9C90LjQuiDRg9GB0YLQsNC90L7QstC60Lgg0LTQvtC70LbQtdC9INC40YHQv9C+0LvRjNC30L7QstCw0YLRjCBnaXRodWIuY29tINC/0L4gSFRUUFMu"
     UnsupportedManifest = "UkVMRUFTRV9NQU5JRkVTVC5qc29uINC40LzQtdC10YIg0L3QtdC/0L7QtNC00LXRgNC20LjQstCw0LXQvNGD0Y4g0YHRhdC10LzRgy4="
+    LegacyRelease = "0JLRi9C/0YPRgdC6IHswfSDRgdC+0LHRgNCw0L0g0LIg0L/RgNC10LbQvdC10Lwg0YTQvtGA0LzQsNGC0LU7INC40YHQv9C+0LvRjNC30YPQudGC0LUgaW5zdGFsbC5wczEg0LjQtyDRjdGC0L7Qs9C+INCy0YvQv9GD0YHQutCwLg=="
     InvalidVersion = "0J3QtdC60L7RgNGA0LXQutGC0L3QsNGPINCy0LXRgNGB0LjRjyB7MH0u"
     ArchitectureMissing = "0J3QtSDRg9C00LDQu9C+0YHRjCDQvtC/0YDQtdC00LXQu9C40YLRjCDQsNGA0YXQuNGC0LXQutGC0YPRgNGDIFdpbmRvd3Mu"
     ArchitectureUnsupported = "0J3QtdC/0L7QtNC00LXRgNC20LjQstCw0LXQvNCw0Y8g0LDRgNGF0LjRgtC10LrRgtGD0YDQsCB7MH0u"
@@ -39,13 +42,15 @@ $MessageCatalog = @{
     ManifestChecksumMismatch = "0JrQvtC90YLRgNC+0LvRjNC90LDRjyDRgdGD0LzQvNCwIFJFTEVBU0VfTUFOSUZFU1QuanNvbiDQvdC1INGB0L7QstC/0LDQu9CwLg=="
     DigestSourcesMismatch = "U0hBLTI1NiDQv9Cw0LrQtdGC0LAg0YDQsNC30LvQuNGH0LDQtdGC0YHRjyDQsiBtYW5pZmVzdCDQuCBTSEEyNTZTVU1TLnR4dC4="
     ArchiveChecksumMismatch = "0JrQvtC90YLRgNC+0LvRjNC90LDRjyDRgdGD0LzQvNCwINCw0YDRhdC40LLQsCDQvdC1INGB0L7QstC/0LDQu9CwLg=="
-    BinaryMissing = "0JIg0LDRgNGF0LjQstC1INC90LUg0L3QsNC50LTQtdC9IHB1bHMuZXhlLg=="
-    IconMissing = "0JIg0LDRgNGF0LjQstC1INC90LUg0L3QsNC50LTQtdC9IEljb24uaWNvLg=="
+    ProgramMissing = "0JIg0LDRgNGF0LjQstC1INC90LUg0L3QsNC50LTQtdC9IHswfS4="
     InstallTargetDirectory = "ezB9INGP0LLQu9GP0LXRgtGB0Y8g0LrQsNGC0LDQu9C+0LPQvtC8OyDRg9GB0YLQsNC90L7QstC60LAg0L7RgdGC0LDQvdC+0LLQu9C10L3QsC4="
     Updated = "0L7QsdC90L7QstC70ZHQvQ=="
     Installed = "0YPRgdGC0LDQvdC+0LLQu9C10L0="
     PathAdded = "0JrQsNGC0LDQu9C+0LMg0LTQvtCx0LDQstC70LXQvSDQsiDQv9C+0LvRjNC30L7QstCw0YLQtdC70YzRgdC60LjQuSBQQVRILiDQntGC0LrRgNC+0LnRgtC1INC90L7QstGL0Lkg0YLQtdGA0LzQuNC90LDQuy4="
 }
+
+$ShortcutDescription = "Puls GUI launcher managed by Puls installer"
+$Programs = @("puls.exe", "puls-gui.exe")
 
 function Get-Message {
     param(
@@ -104,8 +109,36 @@ function Remove-PulsShortcut {
     }
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
-    if ([string]$shortcut.Description -eq "Puls GUI launcher managed by Puls installer") {
+    if ([string]$shortcut.Description -eq $ShortcutDescription) {
         Remove-Item -Force -LiteralPath $shortcutPath
+    }
+}
+
+# Copies a program into the installation directory; an existing program is
+# replaced in one step and never left partially written.
+function Install-PulsProgram {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Target
+    )
+
+    $staged = Join-Path $InstallDir (".puls." + [Guid]::NewGuid().ToString("N") + ".exe")
+    $backup = $null
+    try {
+        [IO.File]::Copy($Source, $staged, $true)
+        if (Test-Path -LiteralPath $Target -PathType Leaf) {
+            $backup = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".exe")
+            [IO.File]::Replace($staged, $Target, $backup)
+        } else {
+            [IO.File]::Move($staged, $Target)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $staged) {
+            Remove-Item -Force -LiteralPath $staged
+        }
+        if ($null -ne $backup -and (Test-Path -LiteralPath $backup)) {
+            Remove-Item -Force -LiteralPath $backup
+        }
     }
 }
 
@@ -129,15 +162,22 @@ if ($usesDefaultInstallDir) {
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 
 if ($Uninstall) {
-    $targetBinary = Join-Path $InstallDir "puls.exe"
-    if (Test-Path -LiteralPath $targetBinary -PathType Container) {
-        throw (Get-Message -Name RemoveTargetDirectory -Arguments $targetBinary)
+    foreach ($program in $Programs) {
+        $target = Join-Path $InstallDir $program
+        if (Test-Path -LiteralPath $target -PathType Container) {
+            throw (Get-Message -Name RemoveTargetDirectory -Arguments $target)
+        }
     }
+    $targetBinary = Join-Path $InstallDir "puls.exe"
     if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
         Remove-Item -Force -LiteralPath $targetBinary
         Write-Host (Get-Message -Name Removed -Arguments $targetBinary)
     } else {
         Write-Host (Get-Message -Name AlreadyRemoved -Arguments $targetBinary)
+    }
+    $targetGui = Join-Path $InstallDir "puls-gui.exe"
+    if (Test-Path -LiteralPath $targetGui -PathType Leaf) {
+        Remove-Item -Force -LiteralPath $targetGui
     }
 
     if (-not $NoPathUpdate) {
@@ -159,9 +199,10 @@ if ($Uninstall) {
     }
 
     Remove-PulsShortcut
-    $targetIcon = Join-Path $InstallDir "Puls.ico"
-    if (Test-Path -LiteralPath $targetIcon -PathType Leaf) {
-        Remove-Item -Force -LiteralPath $targetIcon
+    # Versions before 0.4.0 kept the shortcut icon next to puls.exe.
+    $legacyIcon = Join-Path $InstallDir "Puls.ico"
+    if (Test-Path -LiteralPath $legacyIcon -PathType Leaf) {
+        Remove-Item -Force -LiteralPath $legacyIcon
     }
 
     if ($usesDefaultInstallDir -and (Test-Path -LiteralPath $InstallDir -PathType Container)) {
@@ -188,7 +229,7 @@ if ($RepositoryUrl -notmatch '^https://github\.com/' -and $RepositoryUrl -notmat
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $manifest = Invoke-RestMethod -UseBasicParsing `
         -Uri "$RepositoryUrl/releases/latest/download/RELEASE_MANIFEST.json"
-    if (([int]$manifest.schema_version -ne 1 -and [int]$manifest.schema_version -ne 2) -or [string]$manifest.product -ne "Puls") {
+    if ([string]$manifest.product -ne "Puls") {
         throw (Get-Message -Name UnsupportedManifest)
     }
     $Version = [string]$manifest.version
@@ -215,10 +256,9 @@ switch ($architecture.ToUpperInvariant()) {
 }
 
 $expectedAsset = "Puls_${Version}_windows_${targetArch}.zip"
+$packageName = "Puls_${Version}_windows_${targetArch}"
 $releaseUrl = "$RepositoryUrl/releases/download/v$Version"
 $temporaryDir = Join-Path ([IO.Path]::GetTempPath()) ("puls-install-" + [Guid]::NewGuid().ToString("N"))
-$stagedBinary = $null
-$backupBinary = $null
 
 try {
     New-Item -ItemType Directory -Path $temporaryDir | Out-Null
@@ -232,7 +272,14 @@ try {
             throw (Get-Message -Name ManifestMissingProperty -Arguments $requiredProperty)
         }
     }
-    if (([int]$releaseManifest.schema_version -ne 1 -and [int]$releaseManifest.schema_version -ne 2) -or [string]$releaseManifest.product -ne "Puls") {
+    if ([string]$releaseManifest.product -ne "Puls") {
+        throw (Get-Message -Name UnsupportedManifest)
+    }
+    $schema = [int]$releaseManifest.schema_version
+    if ($schema -eq 1 -or $schema -eq 2) {
+        throw (Get-Message -Name LegacyRelease -Arguments $Version)
+    }
+    if ($schema -ne 3) {
         throw (Get-Message -Name UnsupportedManifest)
     }
     if ([string]$releaseManifest.version -ne $Version) {
@@ -242,32 +289,24 @@ try {
         $assetProperties = @($_.PSObject.Properties.Name)
         $assetProperties -contains "os" -and
             $assetProperties -contains "arch" -and
-            $assetProperties -contains "file" -and
-            $assetProperties -contains "sha256" -and
             [string]$_.os -eq "windows" -and [string]$_.arch -eq $targetArch
     })
     if ($matchingAssets.Count -ne 1) {
         throw (Get-Message -Name ManifestTargetCount -Arguments $targetArch)
     }
+    $assetProperties = @($matchingAssets[0].PSObject.Properties.Name)
+    foreach ($requiredProperty in @("file", "sha256", "kind", "capabilities")) {
+        if ($assetProperties -notcontains $requiredProperty) {
+            throw (Get-Message -Name ManifestMissingProperty -Arguments $requiredProperty)
+        }
+    }
     $asset = [string]$matchingAssets[0].file
     $manifestChecksum = [string]$matchingAssets[0].sha256
-    $hasGUI = $false
-    if ([int]$releaseManifest.schema_version -eq 2) {
-        $assetProperties = @($matchingAssets[0].PSObject.Properties.Name)
-        foreach ($requiredProperty in @("kind", "capabilities")) {
-            if ($assetProperties -notcontains $requiredProperty) {
-                throw (Get-Message -Name ManifestMissingProperty -Arguments $requiredProperty)
-            }
-        }
-        if ([string]$matchingAssets[0].kind -ne "archive") {
-            throw (Get-Message -Name ManifestUnexpectedAsset -Arguments $asset)
-        }
-        $capabilities = @($matchingAssets[0].capabilities | ForEach-Object { [string]$_ })
-        if ($capabilities -notcontains "cli") {
-            throw (Get-Message -Name ManifestUnexpectedAsset -Arguments $asset)
-        }
-        $hasGUI = $capabilities -contains "gui"
+    $capabilities = @($matchingAssets[0].capabilities | ForEach-Object { [string]$_ })
+    if ([string]$matchingAssets[0].kind -ne "archive" -or $capabilities -notcontains "cli") {
+        throw (Get-Message -Name ManifestUnexpectedAsset -Arguments $asset)
     }
+    $hasGUI = $capabilities -contains "gui"
     if ($asset -cne $expectedAsset) {
         throw (Get-Message -Name ManifestUnexpectedAsset -Arguments $asset)
     }
@@ -312,41 +351,33 @@ try {
 
     $extractDir = Join-Path $temporaryDir "extracted"
     Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDir
-    $binaryPath = Join-Path $extractDir "Puls_${Version}_windows_${targetArch}\puls.exe"
-    if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
-        throw (Get-Message -Name BinaryMissing)
-    }
-    $iconPath = $null
+    $packageDir = Join-Path $extractDir $packageName
+    $installPrograms = @("puls.exe")
     if ($hasGUI) {
-        $iconPath = Join-Path $extractDir "Puls_${Version}_windows_${targetArch}\assets\Icon.ico"
-        if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
-            throw (Get-Message -Name IconMissing)
+        $installPrograms += "puls-gui.exe"
+    }
+    foreach ($program in $installPrograms) {
+        if (-not (Test-Path -LiteralPath (Join-Path $packageDir $program) -PathType Leaf)) {
+            throw (Get-Message -Name ProgramMissing -Arguments $program)
         }
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $targetBinary = Join-Path $InstallDir "puls.exe"
-    if (Test-Path -LiteralPath $targetBinary -PathType Container) {
-        throw (Get-Message -Name InstallTargetDirectory -Arguments $targetBinary)
+    foreach ($program in $installPrograms) {
+        $target = Join-Path $InstallDir $program
+        if (Test-Path -LiteralPath $target -PathType Container) {
+            throw (Get-Message -Name InstallTargetDirectory -Arguments $target)
+        }
     }
+    $targetBinary = Join-Path $InstallDir "puls.exe"
     $installAction = if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
         Get-Message -Name Updated
     } else {
         Get-Message -Name Installed
     }
-    $stagedBinary = Join-Path $InstallDir (".puls." + [Guid]::NewGuid().ToString("N") + ".exe")
-    [IO.File]::Copy($binaryPath, $stagedBinary, $true)
-    if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
-        $backupBinary = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".exe")
-        [IO.File]::Replace($stagedBinary, $targetBinary, $backupBinary)
-    } else {
-        [IO.File]::Move($stagedBinary, $targetBinary)
+    foreach ($program in $installPrograms) {
+        Install-PulsProgram -Source (Join-Path $packageDir $program) -Target (Join-Path $InstallDir $program)
     }
-    $stagedBinary = $null
-    if ($null -ne $backupBinary -and (Test-Path -LiteralPath $backupBinary)) {
-        Remove-Item -Force -LiteralPath $backupBinary
-    }
-    $backupBinary = $null
 
     if (-not $NoPathUpdate) {
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -372,32 +403,29 @@ try {
     }
 
     if ($hasGUI -and -not $NoShortcut) {
-        $targetIcon = Join-Path $InstallDir "Puls.ico"
-        [IO.File]::Copy($iconPath, $targetIcon, $true)
         $shortcutPath = Get-PulsShortcutPath
         if ($null -ne $shortcutPath) {
             $shortcutDirectory = Split-Path -Parent $shortcutPath
             New-Item -ItemType Directory -Force -Path $shortcutDirectory | Out-Null
+            $targetGui = Join-Path $InstallDir "puls-gui.exe"
             $shell = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-            $quotedBinary = $targetBinary.Replace("'", "''")
-            $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -Command `"& '$quotedBinary' gui`""
+            $shortcut.TargetPath = $targetGui
+            $shortcut.Arguments = ""
             $shortcut.WorkingDirectory = $InstallDir
-            $shortcut.IconLocation = "$targetIcon,0"
-            $shortcut.Description = "Puls GUI launcher managed by Puls installer"
+            $shortcut.IconLocation = "$targetGui,0"
+            $shortcut.Description = $ShortcutDescription
             $shortcut.Save()
+        }
+        # Versions before 0.4.0 kept the shortcut icon next to puls.exe.
+        $legacyIcon = Join-Path $InstallDir "Puls.ico"
+        if (Test-Path -LiteralPath $legacyIcon -PathType Leaf) {
+            Remove-Item -Force -LiteralPath $legacyIcon
         }
     }
 
     Write-Host "Puls $Version ${installAction}: $targetBinary"
 } finally {
-    if ($null -ne $stagedBinary -and (Test-Path -LiteralPath $stagedBinary)) {
-        Remove-Item -Force -LiteralPath $stagedBinary
-    }
-    if ($null -ne $backupBinary -and (Test-Path -LiteralPath $backupBinary)) {
-        Remove-Item -Force -LiteralPath $backupBinary
-    }
     if (Test-Path -LiteralPath $temporaryDir) {
         Remove-Item -Recurse -Force -LiteralPath $temporaryDir
     }
