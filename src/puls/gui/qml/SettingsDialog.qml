@@ -1,7 +1,7 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
+import QtQuick.Templates as T
 
 // Measurement and appearance settings. Values are validated by the dashboard
 // model when the dialog is saved.
@@ -23,7 +23,7 @@ Dialog {
         themeBox.currentIndex = dashboard.themeIndex
     }
 
-    parent: Overlay.overlay
+    parent: T.Overlay.overlay
     x: Math.round((parent.width - width) / 2)
     y: Math.round((parent.height - height) / 2)
     width: Math.min(420, parent.width - 32)
