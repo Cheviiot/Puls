@@ -43,9 +43,11 @@ puls_add_test(puls_gui_model_tests SOURCES gui_model_test.cpp LIBRARIES Puls::gu
 if(PULS_BUILD_GUI)
     puls_add_test(puls_gui_tests NO_MAIN SOURCES gui_test.cpp LIBRARIES Puls::gui)
     if(PULS_QT_STATIC)
-        # The tests render without a display.
+        # qmlimportscanner looks for the QML imports in the source directory
+        # of the target and in the extra root paths. The tests render
+        # without a display.
         set_target_properties(puls_gui_tests PROPERTIES
-            QT_QML_ROOT_PATH "${PROJECT_SOURCE_DIR}/src/puls/gui/qml")
+            QT_QML_IMPORT_SCANNER_EXTRA_ROOT_PATHS "${PROJECT_SOURCE_DIR}/src/puls/gui/qml")
         qt_import_plugins(puls_gui_tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
         qt_import_qml_plugins(puls_gui_tests)
     endif()

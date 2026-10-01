@@ -139,9 +139,11 @@ if(PULS_BUILD_GUI)
     qt_add_executable(puls-gui WIN32 MACOSX_BUNDLE puls/gui/main.cpp)
     target_link_libraries(puls-gui PRIVATE Puls::gui Puls::ui)
     target_compile_definitions(puls-gui PRIVATE PULS_VERSION="${PULS_VERSION}")
-    # The QML imports decide which QML plugins are linked statically or
-    # deployed into the Android package.
+    # The QML imports decide which QML plugins are linked statically
+    # (qmlimportscanner) or deployed into the Android package
+    # (androiddeployqt).
     set_target_properties(puls-gui PROPERTIES
+        QT_QML_IMPORT_SCANNER_EXTRA_ROOT_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/puls/gui/qml"
         QT_QML_ROOT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/puls/gui/qml")
     if(PULS_QT_STATIC)
         qt_import_qml_plugins(puls-gui)
