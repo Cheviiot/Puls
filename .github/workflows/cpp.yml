@@ -301,6 +301,36 @@ jobs:
               break
             }
           }
+      # The tests render offscreen; the released program must also start
+      # with the platform plugin of the system and its static QML plugins.
+      - name: Start the GUI
+        if: matrix.package-os != '' && matrix.gui == 'ON'
+        shell: bash
+        run: |
+          build="build/${{ matrix.preset }}/src"
+          case "$RUNNER_OS" in
+            Linux)
+              gui="$build/puls-gui"
+              echo "Библиотеки системы, нужные puls-gui:"
+              readelf --dynamic "$gui" | grep NEEDED
+              Xvfb :99 -screen 0 1280x800x24 &
+              export DISPLAY=:99
+              sleep 2
+              ;;
+            macOS) gui="$build/Puls.app/Contents/MacOS/Puls" ;;
+            Windows) gui="$build/puls-gui.exe" ;;
+          esac
+          "$gui" --verbose &
+          pid=$!
+          sleep 10
+          if ! kill -0 "$pid" 2> /dev/null; then
+            status=0
+            wait "$pid" || status=$?
+            echo "puls-gui завершился раньше чем через 10 секунд, код $status" >&2
+            exit 1
+          fi
+          kill "$pid"
+          wait "$pid" || true
       - name: Package
         if: matrix.package-os != ''
         shell: bash
