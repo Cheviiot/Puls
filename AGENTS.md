@@ -63,7 +63,8 @@ puls version
 - `cmd/puls`: parsing, configuration, orchestration, results, JSON, rendering;
 - `internal/application`: единая orchestration и модели для CLI/GUI;
 - `internal/gui`: Fyne dashboard, тема, lifecycle и безопасные preferences;
-- `cmd/release`: targets, builder, archives, manifest, checksums, installers;
+- `scripts/release.py`: архивы выпуска, manifest и checksums; `scripts/tests` —
+  тесты инструмента выпуска и установщиков;
 - `internal/measure`: общий concurrency engine;
 - `internal/service`: `Backend`, `ConnectionInfoBackend`, общие types/helpers;
 - `internal/service/yandex`: только протокол Яндекса;
@@ -275,10 +276,12 @@ throughput запускается только с `PULS_LIVE_THROUGHPUT=1`.
 собирай и тестируй в `puls-fyne-dev`, PowerShell — в `puls-powershell-dev`;
 команды описаны в `docs/distribution.md`. Windows integration test обязателен в CI.
 
-Release builder обязан сохранять шесть desktop targets: native CGO GUI+CLI для
-поддерживаемых платформ и `nogui` для Windows arm64. Сохраняй reproducible
-archives, manifest schema 2, SHA-256, installers, PATH/update/uninstall,
-управляемые shortcuts и ASCII without BOM для `install.ps1`. Android APK
+Выпуск обязан сохранять шесть desktop targets: `puls` и `puls-gui` для Linux,
+macOS и Windows на x64 и ARM64 и только CLI для Windows ARM64. Сохраняй
+reproducible archives, manifest schema 3, SHA-256, installers,
+PATH/update/uninstall, управляемые shortcuts и ASCII without BOM для
+`install.ps1`. Изменения архивов, manifest и установщиков проверяй
+`python3 -m unittest discover -s scripts/tests`. Android APK
 подписывается только секретами GitHub Actions; keystore не добавлять в Git.
 
 ## Definition of Done

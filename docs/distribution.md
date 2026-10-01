@@ -15,8 +15,7 @@ distrobox enter puls-fyne-dev -- sudo apt-get install -y \
 
 ```sh
 distrobox enter puls-fyne-dev -- bash -lc 'cd "$PWD" && go test ./...'
-distrobox enter puls-fyne-dev -- bash -lc \
-  'cd "$PWD" && go run ./cmd/release --mode gui --targets linux/amd64 --version dev'
+distrobox enter puls-fyne-dev -- bash -lc 'cd "$PWD" && go build ./cmd/puls'
 ```
 
 CLI-only сборка не требует CGO:
@@ -27,24 +26,38 @@ go build -tags nogui ./cmd/puls
 
 ## Артефакты
 
-Release workflow собирает native GUI+CLI архивы для Linux, Windows amd64 и
-macOS. Windows arm64 временно получает CLI-only архив. Android публикуется как
-подписанный universal APK с application ID `io.github.cheviiot.puls`.
+Release workflow вызывает workflow `C++`: он собирает, тестирует и упаковывает
+шесть desktop-архивов — Linux, macOS и Windows на x64 и ARM64; для Windows
+ARM64 только CLI. Android публикуется как подписанный universal APK с
+application ID `io.github.cheviiot.puls`.
 
-`RELEASE_MANIFEST.json` schema 2 указывает OS, architecture, kind,
-capabilities и SHA-256 каждого пакета. `SHA256SUMS.txt` включает архивы, APK,
-manifest и установщики. Архивы содержат binary, иконки, README, CHANGELOG и
-LICENSE.
+Архив содержит CLI `puls` и графическое приложение `puls-gui` (на macOS —
+`Puls.app`), README, CHANGELOG, LICENSE и `THIRD_PARTY_NOTICES.txt` с
+лицензиями зависимостей; для Linux — ещё значок для ярлыка. Программы
+слинкованы статически и не требуют установки библиотек, кроме системных
+библиотек X11 на Linux.
+
+`scripts/release.py package` превращает каталог `cmake --install` с
+`PULS_PORTABLE_INSTALL=ON` в воспроизводимый архив: записи отсортированы,
+время, владельцы и права фиксированы. `scripts/release.py assemble` проверяет
+архивы всех шести целей и APK и записывает `RELEASE_MANIFEST.json` schema 3
+(OS, architecture, kind, capabilities и SHA-256 каждого пакета) и
+`SHA256SUMS.txt`, включая manifest и установщики.
 
 Установщики работают без прав администратора:
 
-- Linux/macOS: `$HOME/.local/bin/puls` и ярлык приложения;
-- Windows: `%LOCALAPPDATA%\Programs\Puls\bin` и ярлык Start Menu;
-- `--no-shortcut` / `-NoShortcut` отключает ярлык;
+- Linux/macOS: `$HOME/.local/bin/puls` и `puls-gui` (Linux) с ярлыком в меню
+  приложений или `~/Applications/Puls.app` (macOS);
+- Windows: `%LOCALAPPDATA%\Programs\Puls\bin\puls.exe` и `puls-gui.exe` с
+  ярлыком Start Menu;
+- `--no-shortcut` / `-NoShortcut` отключает ярлык; на macOS — установку
+  `Puls.app`;
 - повторный запуск обновляет Puls;
-- `--uninstall` / `-Uninstall` удаляет binary и управляемый ярлык.
+- `--uninstall` / `-Uninstall` удаляет программы и управляемый ярлык.
 
-PowerShell-скрипт обязан оставаться ASCII without BOM для Windows PowerShell 5.
+Установщики принимают только manifest schema 3; для выпусков до 0.4.0
+используйте установщик соответствующего выпуска. PowerShell-скрипт обязан
+оставаться ASCII without BOM для Windows PowerShell 5.
 
 ## Android signing
 
@@ -63,12 +76,15 @@ Fyne сначала создаёт подписанный Android App Bundle, з
 SHA-256 `bundletool` формирует из него подписанный universal APK для прямой
 установки вне магазина приложений.
 
-## Выпуск v0.3.x
+## Выпуск
 
 1. Все проверки `main` должны пройти.
-2. Обновить CHANGELOG и `cmd/puls/FyneApp.toml`.
-3. Создать неизменяемый тег соответствующей версии, например `v0.3.3`.
-4. Workflow собирает пять GUI-архивов, Windows arm64 CLI и подписанный APK.
-5. После checksum и provenance attestation draft публикуется автоматически.
+2. Добавить раздел версии в CHANGELOG и обновить `cmd/puls/FyneApp.toml` для
+   Android.
+3. Запустить release workflow вручную с версией: preflight собирает и
+   проверяет все артефакты без публикации.
+4. Создать неизменяемый тег версии, например `v0.4.0`.
+5. Workflow собирает шесть desktop-архивов и подписанный APK; после checksum
+   и provenance attestation draft публикуется автоматически.
 
 Не перемещайте опубликованный тег и не заменяйте release assets.

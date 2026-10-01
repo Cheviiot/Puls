@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Версия для полного preflight без публикации, например 0.3.2
+        description: Версия для полного preflight без публикации, например 0.4.0
         required: true
         type: string
 
@@ -24,15 +24,13 @@ jobs:
   validate:
     name: Validate release
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.value }}
       build: ${{ steps.version.outputs.build }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
       - name: Resolve version
         id: version
         env:
@@ -45,6 +43,10 @@ jobs:
               exit 1
             fi
             version=${GITHUB_REF_NAME#v}
+            if ! grep -Fq "## [$version]" CHANGELOG.md; then
+              echo "В CHANGELOG.md нет раздела [$version]" >&2
+              exit 1
+            fi
           else
             version=$PREFLIGHT_VERSION
           fi
@@ -55,119 +57,16 @@ jobs:
           IFS=. read -r major minor patch <<< "$version"
           echo "value=$version" >> "$GITHUB_OUTPUT"
           echo "build=$((major * 1000000 + minor * 1000 + patch))" >> "$GITHUB_OUTPUT"
-      - name: Install Fyne system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev shellcheck
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Verify sources
-        run: |
-          go mod verify
-          test -z "$(gofmt -l .)"
-          shellcheck scripts/install.sh
-          pwsh -NoProfile -File ./scripts/install.ps1 -Help
-      - name: Validate workflows
-        run: |
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
-      - name: Repeat tests
-        run: go test -count=10 ./...
-      - name: Test with race detector
-        run: go test -race -count=1 ./...
-      - name: Go Vet
-        run: go vet ./...
-      - name: Staticcheck
-        uses: dominikh/staticcheck-action@672a31696676d1592844bf0164b3bbfd855a4d50 # v1.4.1
-        with:
-          version: "2026.1"
-          install-go: false
-      - name: Vulnerability scan
-        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
-        with:
-          repo-checkout: false
-          go-version-input: ""
-          go-version-file: go.mod
-          go-package: ./...
 
+  # Builds, tests and packages the six desktop targets exactly as CI does.
   desktop:
-    name: ${{ matrix.os }}/${{ matrix.arch }} GUI
+    name: Desktop
     needs: validate
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {runner: ubuntu-24.04, os: linux, arch: amd64}
-          - {runner: ubuntu-24.04-arm, os: linux, arch: arm64}
-          - {runner: windows-2025, os: windows, arch: amd64}
-          - {runner: macos-15-intel, os: darwin, arch: amd64}
-          - {runner: macos-15, os: darwin, arch: arm64}
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install Linux dependencies
-        if: matrix.os == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
-      - name: Verify MinGW
-        if: matrix.os == 'windows'
-        shell: pwsh
-        run: |
-          if (-not (Get-Command gcc.exe -ErrorAction SilentlyContinue)) {
-            throw "MinGW gcc.exe is unavailable on this runner"
-          }
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Build native archive
-        shell: bash
-        run: >-
-          go run ./cmd/release --mode gui
-          --targets "${{ matrix.os }}/${{ matrix.arch }}"
-          --version "${{ needs.validate.outputs.version }}"
-          --output dist
-      - name: Upload native archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-${{ matrix.os }}-${{ matrix.arch }}
-          path: |
-            dist/*.tar.gz
-            dist/*.zip
-          if-no-files-found: error
-          retention-days: 3
-
-  windows-arm64:
-    name: windows/arm64 CLI
-    needs: validate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Build CLI archive
-        run: >-
-          go run ./cmd/release --mode cli --targets windows/arm64
-          --version "${{ needs.validate.outputs.version }}" --output dist
-      - name: Upload CLI archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: desktop-windows-arm64
-          path: dist/*.zip
-          if-no-files-found: error
-          retention-days: 3
+    uses: ./.github/workflows/cpp.yml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.validate.outputs.version }}
 
   android:
     name: Signed Android APK
@@ -279,23 +178,16 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [validate, desktop, windows-arm64, android]
+    needs: [validate, desktop, android]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Download desktop artifacts
+      - name: Download desktop packages
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v8.0.1
         with:
-          pattern: desktop-*
+          pattern: package-*
           path: dist
           merge-multiple: true
       - name: Download Android APK
@@ -305,7 +197,7 @@ jobs:
           path: dist
       - name: Assemble release metadata
         run: >-
-          go run ./cmd/release --assemble
+          python3 scripts/release.py assemble --require-android
           --version "${{ needs.validate.outputs.version }}" --output dist
       - name: Verify checksums
         working-directory: dist

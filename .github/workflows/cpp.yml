@@ -16,8 +16,10 @@ on:
 permissions:
   contents: read
 
+# github.workflow names the caller when the release workflow calls this one,
+# so the release run does not cancel or wait for the branch checks.
 concurrency:
-  group: cpp-${{ github.event.pull_request.number || github.ref }}
+  group: cpp-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:

@@ -14,7 +14,8 @@ GUI ─┘                └ measure
 - `service` определяет `Backend`, типизированные ошибки и сетевые контракты;
   вложенные модули реализуют first-party протоколы сервисов.
 - `measure` отвечает за workers, reconnect, deadline и подтверждённые байты.
-- Release builder собирает native GUI/CLI архивы, APK, manifest и checksums.
+- `scripts/release.py` упаковывает архивы выпуска и собирает manifest и
+  checksums; APK пока собирается из Go-версии.
 
 Измерение выполняется последовательно: `select → ping → download → upload`.
 Ошибка отдельного сервиса не останавливает `all`. GUI получает immutable
@@ -48,8 +49,8 @@ Android-приложения и release builder пока остаются в Go 
 | HTTP, WebSocket, TLS | `src/puls/net` | стандартная библиотека Go |
 | Context, ошибки, JSON, IP | `src/puls/core` | стандартная библиотека Go |
 | GUI | `src/puls/gui` | `internal/gui` |
-| Сборка Android | — | `cmd/release`, Fyne |
-| Release builder | — | `cmd/release` |
+| Сборка Android | — | Fyne |
+| Сборка выпуска | `scripts/release.py`, CMake install | — |
 
 Пока обе реализации существуют, изменения протоколов, CLI и JSON вносятся в
 обе либо фиксируются ниже как расхождение.
