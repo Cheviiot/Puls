@@ -130,6 +130,11 @@ jobs:
           {
             echo "VCPKG_ROOT=$temp/vcpkg"
             echo "VCPKG_BINARY_SOURCES=clear;files,$temp/vcpkg-binary-cache,readwrite"
+            # Paths of sources that Qt generates while building exceed
+            # MAX_PATH for MSVC under the default buildtrees directory.
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              echo "VCPKG_CONFIGURE_ARGS=-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=${temp:0:2}/vb"
+            fi
           } >> "$GITHUB_ENV"
       - name: Bootstrap vcpkg
         if: runner.os != 'Windows'
@@ -154,7 +159,7 @@ jobs:
         shell: bash
         run: touch "${RUNNER_TEMP//\\//}/vcpkg-cache-restored"
       - name: Configure
-        run: cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON -DPULS_BUILD_GUI=${{ matrix.gui }}
+        run: cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON -DPULS_BUILD_GUI=${{ matrix.gui }} ${{ env.VCPKG_CONFIGURE_ARGS }}
       - name: Find new vcpkg packages
         id: vcpkg-new
         if: always()

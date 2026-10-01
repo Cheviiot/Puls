@@ -43,8 +43,12 @@ ctest --preset debug
 ```
 
 На Windows используйте preset `windows-debug` в Developer PowerShell для
-Visual Studio. Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3,
-Qt 6.4+ и GoogleTest через preset `system-debug`:
+Visual Studio. Пути исходников, которые Qt генерирует при сборке, превышают
+MAX_PATH, если каталог vcpkg расположен глубоко; укажите короткий каталог
+сборки зависимостей: `-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/vb`.
+
+Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3, Qt 6.4+ и
+GoogleTest через preset `system-debug`:
 
 ```bash
 sudo apt-get install cmake ninja-build g++ libboost-dev libboost-json-dev libssl-dev \
