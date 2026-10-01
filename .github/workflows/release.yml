@@ -138,7 +138,10 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: dist/SHA256SUMS.txt
-      - name: Create and upload draft
+      # The release is created as a draft, completed and only then published.
+      # If any of it fails while the release is still a draft, the draft and
+      # the tag of a manual release are removed, so the run can be repeated.
+      - name: Create and publish release
         if: needs.validate.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,11 +151,19 @@ jobs:
           release_created=0
           cleanup_failed_release() {
             status=$?
-            if [[ "$status" -ne 0 && "$release_created" -eq 1 ]]; then
-              gh release delete "$TAG" --yes || true
-            fi
-            if [[ "$status" -ne 0 && "$tag_created" -eq 1 ]]; then
-              git push origin --delete "refs/tags/$TAG" || true
+            if [[ "$status" -ne 0 ]]; then
+              unpublished=true
+              if [[ "$release_created" -eq 1 ]]; then
+                # A release that may have become public is left as it is.
+                if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft || true)" == "true" ]]; then
+                  gh release delete "$TAG" --yes || true
+                else
+                  unpublished=false
+                fi
+              fi
+              if [[ "$tag_created" -eq 1 && "$unpublished" == "true" ]]; then
+                git push origin --delete "refs/tags/$TAG" || true
+              fi
             fi
             exit "$status"
           }
@@ -189,11 +200,8 @@ jobs:
             echo "install.ps1 опубликован с неверным Content-Type: $content_type" >&2
             exit 1
           fi
+          # Installers download the latest release. GitHub would otherwise
+          # pick it by version, and the numbering restarted below earlier
+          # versions.
+          gh release edit "$TAG" --draft=false --latest
           trap - EXIT
-      # Installers download the latest release. GitHub would otherwise pick
-      # it by version, and the numbering restarted below earlier versions.
-      - name: Publish release
-        if: needs.validate.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$TAG" --draft=false --latest
