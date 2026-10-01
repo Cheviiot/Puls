@@ -2,6 +2,8 @@
 #include "puls/service/yandex/backend.hpp"
 #include "puls/service/yandex/internal.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <limits>
 #include <thread>
 
@@ -15,6 +17,8 @@ using service::Phase;
 using service::ServiceId;
 
 constexpr int samples_per_url = 4;
+// Discovery may list many CDNs; at most this many are probed at a time.
+constexpr std::size_t max_parallel_cdns = 8;
 
 struct LatencyResult {
     std::vector<double> samples;
@@ -36,12 +40,15 @@ Result<service::PingResult> Backend::ping(const Context& ctx) {
 
     // Requests to one CDN are sequential over a reused connection, so the
     // first sample includes the connection setup; CDNs are measured in
-    // parallel.
+    // parallel by a bounded number of threads.
     std::vector<LatencyResult> results(urls.size());
-    std::vector<std::thread> threads;
-    threads.reserve(urls.size());
-    for (std::size_t index = 0; index < urls.size(); ++index) {
-        threads.emplace_back([this, &ctx, &urls, &results, index] {
+    std::atomic<std::size_t> next{0};
+    const auto probe_cdns = [this, &ctx, &urls, &results, &next] {
+        for (;;) {
+            const std::size_t index = next.fetch_add(1);
+            if (index >= urls.size() || ctx.done()) {
+                return;
+            }
             net::HttpSession session(http_options());
             std::vector<Error> failures;
             for (int sample = 0; sample < samples_per_url; ++sample) {
@@ -56,7 +63,13 @@ Result<service::PingResult> Backend::ping(const Context& ctx) {
                     std::chrono::duration<double, std::milli>(*duration).count());
             }
             results[index].error = Error::join(std::move(failures));
-        });
+        }
+    };
+    std::vector<std::thread> threads;
+    const std::size_t thread_count = std::min(urls.size(), max_parallel_cdns);
+    threads.reserve(thread_count);
+    for (std::size_t worker = 0; worker < thread_count; ++worker) {
+        threads.emplace_back(probe_cdns);
     }
     for (auto& thread : threads) {
         thread.join();

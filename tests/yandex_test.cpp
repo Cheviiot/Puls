@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <set>
 #include <thread>
 
 namespace puls::yandex {
@@ -228,6 +229,40 @@ TEST(Yandex, PingIsSequentialPerCdnAndParallelAcrossCdns) {
     EXPECT_EQ(max_a, 1);
     EXPECT_EQ(max_b, 1);
     EXPECT_EQ(max_total, 2);
+}
+
+TEST(Yandex, PingProbesEveryCdnWithBoundedThreads) {
+    std::mutex mutex;
+    int active = 0, max_active = 0;
+    std::set<std::string> paths;
+    MockServer server([&](MockExchange& exchange) {
+        {
+            const std::lock_guard lock(mutex);
+            ++active;
+            max_active = std::max(max_active, active);
+            paths.insert(exchange.request().path);
+        }
+        std::this_thread::sleep_for(5ms);
+        {
+            const std::lock_guard lock(mutex);
+            --active;
+        }
+        exchange.respond(204);
+    });
+    // A discovery response may list far more CDNs than the threads that
+    // probe them.
+    std::vector<std::string> urls;
+    for (int index = 0; index < 40; ++index) {
+        urls.push_back(server.url("/" + std::to_string(index)));
+    }
+    Backend backend(test_options());
+    Access::set_latency_urls(backend, urls);
+    const auto result = backend.ping(Context());
+    ASSERT_TRUE(result) << result.error().message();
+    EXPECT_EQ(result->samples, 160);
+    const std::lock_guard lock(mutex);
+    EXPECT_EQ(paths.size(), 40U);
+    EXPECT_LE(max_active, 8);
 }
 
 TEST(Yandex, PingKeepsValidSamplesAfterOneRequestFails) {
