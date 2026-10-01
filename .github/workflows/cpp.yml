@@ -138,20 +138,37 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: '& "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics'
+      # Cache entries are immutable, so every run that builds new packages
+      # saves a new entry and later runs restore the newest one. A run that
+      # fails while installing dependencies still keeps what it has built.
       - name: Restore vcpkg packages
         id: vcpkg-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache
-          key: vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}
+          key: vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-
             vcpkg-${{ matrix.os }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-
+      - name: Mark restored vcpkg packages
+        shell: bash
+        run: touch "${RUNNER_TEMP//\\//}/vcpkg-cache-restored"
       - name: Configure
         run: cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON -DPULS_BUILD_GUI=${{ matrix.gui }}
+      - name: Find new vcpkg packages
+        id: vcpkg-new
+        if: always()
+        shell: bash
+        run: |
+          temp="${RUNNER_TEMP//\\//}"
+          marker="$temp/vcpkg-cache-restored"
+          if [ -f "$marker" ] && [ -n "$(find "$temp/vcpkg-binary-cache" -type f -newer "$marker" -print -quit)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
       # Saved before building so that a compile error does not discard the
       # dependencies installed while configuring.
       - name: Save vcpkg packages
-        if: always() && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        if: always() && steps.vcpkg-new.outputs.found == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/vcpkg-binary-cache

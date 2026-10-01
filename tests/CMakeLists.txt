@@ -7,9 +7,9 @@ target_include_directories(puls_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(puls_test_support PUBLIC Puls::net GTest::gtest)
 puls_configure_target(puls_test_support)
 
-# NO_MAIN tests define main() themselves.
+# NO_MAIN tests define main() themselves; PROPERTIES apply to every test case.
 function(puls_add_test name)
-    cmake_parse_arguments(PARSE_ARGV 1 TEST "NO_MAIN" "" "SOURCES;LIBRARIES")
+    cmake_parse_arguments(PARSE_ARGV 1 TEST "NO_MAIN" "" "SOURCES;LIBRARIES;PROPERTIES")
     add_executable(${name} ${TEST_SOURCES})
     if(TEST_NO_MAIN)
         target_link_libraries(${name} PRIVATE puls_test_support GTest::gtest ${TEST_LIBRARIES})
@@ -18,7 +18,7 @@ function(puls_add_test name)
     endif()
     puls_configure_target(${name})
     gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST DISCOVERY_TIMEOUT 60
-        PROPERTIES TIMEOUT 120)
+        PROPERTIES TIMEOUT 120 ${TEST_PROPERTIES})
 endfunction()
 
 puls_add_test(puls_core_tests SOURCES core_test.cpp LIBRARIES Puls::core)
@@ -30,7 +30,15 @@ puls_add_test(puls_speedtestru_tests SOURCES speedtestru_test.cpp LIBRARIES Puls
 puls_add_test(puls_cli_tests SOURCES cli_test.cpp LIBRARIES Puls::cli)
 puls_add_test(puls_gui_model_tests SOURCES gui_model_test.cpp LIBRARIES Puls::gui_model)
 if(PULS_BUILD_GUI)
-    puls_add_test(puls_gui_tests NO_MAIN SOURCES gui_test.cpp LIBRARIES Puls::gui)
+    set(gui_test_properties)
+    if(WIN32)
+        # vcpkg copies only the DLLs the test links next to it; the plugins
+        # and QML modules load further Qt DLLs from the Qt bin directory.
+        set(gui_test_properties ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:${QT6_INSTALL_PREFIX}/${QT6_INSTALL_BINS}")
+    endif()
+    puls_add_test(puls_gui_tests NO_MAIN SOURCES gui_test.cpp LIBRARIES Puls::gui
+        PROPERTIES ${gui_test_properties})
     # Qt finds its plugins and QML modules relative to its libraries; on
     # Windows vcpkg copies the libraries next to the test, so pass the paths.
     target_compile_definitions(puls_gui_tests PRIVATE
