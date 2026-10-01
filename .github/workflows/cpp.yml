@@ -245,10 +245,12 @@ jobs:
       - name: Mark restored vcpkg packages
         shell: bash
         run: touch "${RUNNER_TEMP//\\//}/vcpkg-cache-restored"
+      # PowerShell splits an unquoted argument that starts with a dash at its
+      # first period, so the version is quoted.
       - name: Configure
         run: >-
           cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON
-          -DPULS_BUILD_GUI=${{ matrix.gui }} -DPULS_VERSION=${{ inputs.version || 'dev' }}
+          -DPULS_BUILD_GUI=${{ matrix.gui }} "-DPULS_VERSION=${{ inputs.version || 'dev' }}"
           -DPULS_PORTABLE_INSTALL=${{ matrix.package-os && 'ON' || 'OFF' }} ${{ env.VCPKG_CONFIGURE_ARGS }}
       - name: Find new vcpkg packages
         id: vcpkg-new
