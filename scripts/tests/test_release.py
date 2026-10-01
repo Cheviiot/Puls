@@ -67,8 +67,11 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(names, sorted(names))
         self.assertEqual(names[0], top)
         modes = {member.name: member.mode for member in members}
-        self.assertEqual(modes[f"{top}/puls"], 0o755)
-        self.assertEqual(modes[f"{top}/puls-gui"], 0o755)
+        # Windows file systems keep no executable bits; Unix packages are
+        # built on their own systems.
+        if os.name != "nt":
+            self.assertEqual(modes[f"{top}/puls"], 0o755)
+            self.assertEqual(modes[f"{top}/puls-gui"], 0o755)
         self.assertEqual(modes[f"{top}/README.md"], 0o644)
         self.assertEqual(modes[f"{top}/assets"], 0o755)
         for member in members:
@@ -81,7 +84,8 @@ class PackageTest(unittest.TestCase):
         self.assertTrue(gui)
         with tarfile.open(path, "r:gz") as archive:
             bundle = archive.getmember("Puls_1.2.3_darwin_arm64/Puls.app/Contents/MacOS/Puls")
-        self.assertEqual(bundle.mode, 0o755)
+        if os.name != "nt":
+            self.assertEqual(bundle.mode, 0o755)
 
     def test_zip_archive_for_windows(self):
         stage = make_stage(self.directory / "stage", "windows")

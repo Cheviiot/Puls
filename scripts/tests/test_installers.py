@@ -345,10 +345,14 @@ class PowerShellInstallerTest(InstallerTest):
             env=self.environment(**environment))
 
     def run_script(self, arguments, **environment):
-        quoted = " ".join("'" + str(argument).replace("'", "''") + "'"
-                          for argument in arguments)
-        script = str(INSTALL_PS1).replace("'", "''")
-        return self.powershell_command(f"& '{script}' {quoted}", **environment)
+        def quote(value):
+            return "'" + str(value).replace("'", "''") + "'"
+
+        # Parameter names stay unquoted; quoted text is a positional value.
+        command = " ".join(
+            argument if str(argument).startswith("-") else quote(argument)
+            for argument in arguments)
+        return self.powershell_command(f"& {quote(INSTALL_PS1)} {command}", **environment)
 
     def test_installs_updates_and_uninstalls(self):
         result = self.run_script(["-Help"])
