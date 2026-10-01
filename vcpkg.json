@@ -59,6 +59,10 @@
               "platform": "linux"
             },
             {
+              "name": "dnslookup",
+              "platform": "osx"
+            },
+            {
               "name": "fontconfig",
               "platform": "linux"
             },

@@ -9,6 +9,10 @@ set(VCPKG_CMAKE_SYSTEM_NAME Darwin)
 set(VCPKG_OSX_ARCHITECTURES arm64)
 set(VCPKG_OSX_DEPLOYMENT_TARGET 13.3)
 
+# Dependencies are built only in Release: debug builds of Puls use them like
+# system libraries, and Qt takes half as long to build.
+set(VCPKG_BUILD_TYPE release)
+
 if(PORT MATCHES "^qt")
     set(VCPKG_LIBRARY_LINKAGE dynamic)
 endif()

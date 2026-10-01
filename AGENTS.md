@@ -256,8 +256,9 @@ OpenSSL ≥ 3.0, Qt ≥ 6.4 и GTest; санитайзеры включает `-
 экрана для проверки вёрстки. Live tests собираются с `-DPULS_LIVE_TESTS=ON`.
 Workflow `cpp.yml` обязан проходить на Linux GCC/Clang, ASan+UBSan, TSan, macOS
 и Windows MSVC. Qt из vcpkg линкуется динамически (overlay triplets в
-`cmake/triplets`). TSan собирается без Qt: неинструментированный Qt
-синхронизирует очередь событий через futex, и TSan даёт ложные срабатывания.
+`cmake/triplets`); на Linux и macOS зависимости собираются только в Release.
+TSan собирается без Qt: неинструментированный Qt синхронизирует очередь
+событий через futex, и TSan даёт ложные срабатывания.
 
 Network tests используют local HTTP/WebSocket mocks и покрывают success, exact
 bytes, malformed frames/JSON, 401/403/5xx, disconnect, partial success,

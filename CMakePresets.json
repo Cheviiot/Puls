@@ -84,7 +84,9 @@
       "displayName": "Windows Release (MSVC, vcpkg, shared Qt)",
       "inherits": "windows",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-static-md-release",
+        "VCPKG_HOST_TRIPLET": "x64-windows-static-md-release"
       }
     },
     {

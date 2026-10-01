@@ -6,6 +6,10 @@ set(VCPKG_LIBRARY_LINKAGE static)
 
 set(VCPKG_CMAKE_SYSTEM_NAME Linux)
 
+# Dependencies are built only in Release: debug builds of Puls use them like
+# system libraries, and Qt takes half as long to build.
+set(VCPKG_BUILD_TYPE release)
+
 if(PORT MATCHES "^qt")
     set(VCPKG_LIBRARY_LINKAGE dynamic)
 endif()

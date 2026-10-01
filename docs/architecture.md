@@ -78,6 +78,12 @@ Android-приложения и release builder пока остаются в Go 
 - Overlay-порт `cmake/ports/libuuid` намеренно пуст: порт fontconfig в vcpkg
   объявляет зависимость от libuuid, но fontconfig 2.17 её не использует, а
   исходники libuuid загружаются с ненадёжного SourceForge.
+- На Linux и macOS зависимости vcpkg собираются только в Release. MSVC не
+  смешивает отладочную и обычную CRT, поэтому на Windows preset
+  `windows-release` использует triplet `x64-windows-static-md-release`, а
+  `windows-debug` собирает обе конфигурации.
+- На macOS у qtbase включена функция `dnslookup`: без неё Qt 6.11 использует
+  libresolv в `QHostInfo`, но не линкует её.
 - JSON schema 1 кодируется побайтно совместимо с Go (`encoding/json` с
   отступом в два пробела и HTML-экранированием).
 - Тесты используют GoogleTest и локальные HTTPS/WSS серверы с временными

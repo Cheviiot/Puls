@@ -81,7 +81,7 @@ jobs:
           - name: Windows · MSVC · GUI
             os: windows-2025
             preset: windows-release
-            triplet: x64-windows-static-md
+            triplet: x64-windows-static-md-release
             gui: "ON"
     steps:
       - name: Checkout
