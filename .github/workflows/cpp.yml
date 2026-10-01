@@ -261,7 +261,36 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
+        id: test
         run: ctest --preset ${{ matrix.preset }}
+      # ctest shows only "Access violation" for a crashed test; the debugger
+      # prints the stack and the code of the first crashed test.
+      - name: Show the stack of a crashed test (Windows)
+        if: failure() && steps.test.outcome == 'failure' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          BUILD_DIR: build/${{ matrix.preset }}
+        run: |
+          $machine = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $cdb = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Debuggers\$machine\cdb.exe"
+          if (-not (Test-Path $cdb)) {
+            Write-Output "cdb.exe не найден: $cdb"
+            exit 0
+          }
+          $failed = Get-Content "$env:BUILD_DIR/Testing/Temporary/LastTestsFailed.log" -TotalCount 1
+          $name = $failed.Split(':', 2)[1]
+          $script = Join-Path $env:RUNNER_TEMP 'cdb-crash.txt'
+          Set-Content -Path $script -Value @(
+            'sxe -c "r; kn 40; ub @pc L10; u @pc L4; q" av',
+            'g'
+          )
+          foreach ($exe in Get-ChildItem "$env:BUILD_DIR/tests" -Filter 'puls_*_tests.exe') {
+            $listed = & $exe.FullName --gtest_list_tests "--gtest_filter=$name"
+            if ($listed -match '^\s+\S') {
+              & $cdb -G -lines -cf $script $exe.FullName "--gtest_filter=$name"
+              break
+            }
+          }
       - name: Package
         if: matrix.package-os != ''
         shell: bash

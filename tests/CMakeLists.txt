@@ -17,6 +17,10 @@ function(puls_add_test name)
         target_link_libraries(${name} PRIVATE puls_test_support GTest::gtest_main ${TEST_LIBRARIES})
     endif()
     puls_configure_target(${name})
+    if(MSVC)
+        # Function names in the stack of a crashed test on CI.
+        target_link_options(${name} PRIVATE /DEBUG)
+    endif()
     gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST DISCOVERY_TIMEOUT 60
         PROPERTIES TIMEOUT 120)
 endfunction()
