@@ -22,3 +22,6 @@ Thumbs.db
 
 .idea/
 .vscode/
+
+# Python bytecode of the release tools.
+__pycache__/
