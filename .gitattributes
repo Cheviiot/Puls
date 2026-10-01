@@ -1,6 +1,5 @@
 * text=auto eol=lf
 
-*.go text diff=golang
 *.cpp text diff=cpp
 *.hpp text diff=cpp
 *.cmake text
@@ -9,7 +8,6 @@ CMakeLists.txt text
 *.yml text
 *.yaml text
 *.json text
-*.sum text
 *.sh text eol=lf
 *.ps1 text eol=lf
 

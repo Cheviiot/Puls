@@ -4,15 +4,11 @@
 *.apk
 *.keystore
 *.jks
-/coverage.out
-/coverage.html
 /build/
 /out/
 /vcpkg_installed/
 CMakeUserPresets.json
 
-*.test
-*.prof
 .DS_Store
 Thumbs.db
 

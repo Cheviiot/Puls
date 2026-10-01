@@ -7,13 +7,10 @@
 - [ ] `ctest --preset debug --repeat until-fail:10`
 - [ ] `ctest` с presets `sanitize` и `tsan`
 - [ ] `clang-format-18 --dry-run --Werror` для изменённых C++ файлов
-- [ ] `go test ./...`
-- [ ] `go test -race ./...`
-- [ ] `go vet ./...`
-- [ ] `staticcheck ./...`
-- [ ] `govulncheck ./...`
 - [ ] При изменении workflow выполнен `actionlint .github/workflows/*.yml`
-- [ ] При изменении установщиков выполнены `shellcheck` и PowerShell `-Help`
+- [ ] При изменении выпуска или установщиков выполнены
+      `python3 -m unittest discover -s scripts/tests`, `shellcheck` и
+      PowerShell `-Help`
 - [ ] Изменение GUI проверено в светлой/тёмной теме и на узком размере окна
 - [ ] Для изменения протокола добавлен локальный тест ответа сервиса
 - [ ] Сетевой тест выполнен только при необходимости

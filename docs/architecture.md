@@ -30,33 +30,30 @@ GUI сохраняет тему, сервис, профиль, длительн�
 фазу и размер окна. IP, ISP, сервер, результаты, diagnostics и credentials на
 диск не записываются.
 
-## Переход на C++
+## Устройство
 
-Проект переносится с Go на C++20 с CMake и vcpkg. C++ версия уже содержит
-CLI, GUI на Qt Quick, application runner, engine, оба протокола, сборку
-выпуска и Android-приложения; Go-версия удаляется следующим этапом.
+Puls написан на C++20 и собирается CMake; зависимости из `vcpkg.json`
+устанавливает vcpkg. До версии 0.4 Puls был написан на Go: команды, JSON и
+протоколы перенесены без изменений, отличия перечислены ниже.
 
-| Слой | C++ | Go |
-| --- | --- | --- |
-| CLI | `src/puls/cli` | `cmd/puls` |
-| Application | `src/puls/application` | `internal/application` |
-| Engine | `src/puls/measure` | `internal/measure` |
-| Общие контракты | `src/puls/service` | `internal/service` |
-| Яндекс.Интернетометр | `src/puls/service/yandex` | `internal/service/yandex` |
-| speedtest.ru | `src/puls/service/speedtestru` | `internal/service/speedtestru` |
-| Терминал | `src/puls/ui` | `internal/ui` |
-| HTTP, WebSocket, TLS | `src/puls/net` | стандартная библиотека Go |
-| Context, ошибки, JSON, IP | `src/puls/core` | стандартная библиотека Go |
-| GUI | `src/puls/gui` | `internal/gui` |
-| Сборка Android | Qt for Android, `cmake/android-toolchain.cmake` | — |
-| Сборка выпуска | `scripts/release.py`, CMake install | — |
+| Слой | Каталог |
+| --- | --- |
+| CLI | `src/puls/cli` |
+| Application | `src/puls/application` |
+| Engine | `src/puls/measure` |
+| Общие контракты | `src/puls/service` |
+| Яндекс.Интернетометр | `src/puls/service/yandex` |
+| speedtest.ru | `src/puls/service/speedtestru` |
+| Терминал | `src/puls/ui` |
+| HTTP, WebSocket, TLS | `src/puls/net` |
+| Context, ошибки, JSON, IP | `src/puls/core` |
+| GUI | `src/puls/gui` |
+| Сборка Android | Qt for Android, `cmake/android-toolchain.cmake` |
+| Сборка выпуска | `scripts/release.py`, CMake install |
 
-Пока обе реализации существуют, изменения протоколов, CLI и JSON вносятся в
-обе либо фиксируются ниже как расхождение.
+### Решения
 
-### Устройство C++ версии
-
-- `core::Context` и `CancelScope` повторяют семантику Go `context`: отмена,
+- `core::Context` и `CancelScope` повторяют семантику `context` из Go: отмена,
   deadline и callbacks, которые закрывают сетевые операции.
 - `Error` хранит дерево причин с тегами и типизированными деталями — аналог
   `errors.Is/As`; `Result<T>` возвращает значение или ошибку. Сетевые и
@@ -75,7 +72,7 @@ CLI, GUI на Qt Quick, application runner, engine, оба протокола, �
   правила dashboard находятся в Qt-независимой `gui::Dashboard` и
   тестируются во всех конфигурациях; `DashboardController` запускает runner в
   рабочем потоке и передаёт события в UI-поток queued-вызовами. Настройки
-  хранятся в `QSettings` с теми же ключами, что и в Go-версии.
+  хранятся в `QSettings` с теми же ключами, что и в версиях на Go.
 - GUI — отдельная программа `puls-gui` (на macOS — `Puls.app`), поэтому CLI
   не зависит от Qt и графических библиотек системы. `puls gui` ищет её в
   каталоге `puls`, на macOS также в `~/Applications` и `/Applications`, и на
@@ -105,17 +102,21 @@ CLI, GUI на Qt Quick, application runner, engine, оба протокола, �
   дистрибутивов.
 - На macOS у qtbase включена функция `dnslookup`: без неё Qt 6.11 использует
   libresolv в `QHostInfo`, но не линкует её.
-- JSON schema 1 кодируется побайтно совместимо с Go (`encoding/json` с
-  отступом в два пробела и HTML-экранированием).
+- OpenSSL собирается MSVC с `/Gs0` — пробой стека в каждой функции. На
+  Windows ARM64 компилятор тогда вызывает `__chkstk` в некоторых функциях до
+  сохранения регистра возврата, и они возвращаются сами в себя. Triplet
+  `arm64-windows-static-release` задаёт после `/Gs0` порог в одну страницу.
+- JSON schema 1 кодируется побайтно так же, как в версиях на Go
+  (`encoding/json` с отступом в два пробела и HTML-экранированием).
 - Тесты используют GoogleTest и локальные HTTPS/WSS серверы с временными
   сертификатами; live tests собираются только с `PULS_LIVE_TESTS=ON`.
 
-### Отличия от Go-версии
+### Отличия от версий на Go
 
 - Используется только HTTP/1.1: каждый поток измерения получает отдельное
   TCP-соединение, HTTP/2 multiplexing не применяется.
 - Proxy из окружения не используется, включая WebSocket Яндекса.
-- Ошибки флагов, которые Go-версия выводила по-английски из пакета `flag`
+- Ошибки флагов, которые версии на Go выводили по-английски из пакета `flag`
   (`bad flag syntax`, `invalid boolean value`), выводятся по-русски.
 - Windows: OpenSSL видит только корневые сертификаты, уже установленные в
   хранилище; автоматическая загрузка отсутствующих корней Windows не

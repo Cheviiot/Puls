@@ -4,7 +4,7 @@
 
 **Проверка скорости интернета в приложении и терминале**
 
-[![CI](https://github.com/Cheviiot/Puls/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheviiot/Puls/actions/workflows/ci.yml)
+[![CI](https://github.com/Cheviiot/Puls/actions/workflows/cpp.yml/badge.svg)](https://github.com/Cheviiot/Puls/actions/workflows/cpp.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
 </div>

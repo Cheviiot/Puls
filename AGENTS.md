@@ -20,7 +20,7 @@ ping, download и upload через два сервиса измерения:
 - endpoint/probe — только код протокола и verbose-диагностика.
 
 Пользовательские сообщения и help пишутся по-русски. Commands, flags, values,
-environment variables, JSON fields, Go symbols, package names, code comments и
+environment variables, JSON fields, C++ symbols, module names, code comments и
 commit messages остаются английскими. Не добавляй кириллические flags.
 
 ## Публичный CLI
@@ -60,42 +60,37 @@ puls version
 
 ## Архитектурные границы
 
-- `cmd/puls`: parsing, configuration, orchestration, results, JSON, rendering;
-- `internal/application`: единая orchestration и модели для CLI/GUI;
-- `internal/gui`: Fyne dashboard, тема, lifecycle и безопасные preferences;
-- `scripts/release.py`: архивы выпуска, manifest и checksums; `scripts/tests` —
-  тесты инструмента выпуска и установщиков;
-- `internal/measure`: общий concurrency engine;
-- `internal/service`: `Backend`, `ConnectionInfoBackend`, общие types/helpers;
-- `internal/service/yandex`: только протокол Яндекса;
-- `internal/service/speedtestru`: только протокол speedtest.ru;
-- `internal/ui`: TTY, menu, colors, progress;
-- `scripts`: direct installers;
-- `docs`: архитектура и выпуск.
+Puls написан на C++20: CMake ≥ 3.25, vcpkg manifest, Boost.Asio/Beast/JSON,
+OpenSSL 3, Qt 6 Quick и GoogleTest; Android-приложение собирается с Qt for
+Android.
 
-Передавай logger и внешние зависимости через constructors/options. Не добавляй
-global output, setter вида `SetVerbose` или UI в `MeasurementConfig`. Общие
-лимиты и преобразования принадлежат `internal/service`; правила конкретного
-протокола не выноси туда.
-
-## C++ версия
-
-Проект переносится на C++20: CMake ≥ 3.25, vcpkg manifest, Boost.Asio/Beast/JSON,
-OpenSSL 3, Qt 6 Quick и GoogleTest. `src/puls` уже содержит CLI, GUI,
-application, engine и оба протокола; выпуск и Android-приложение собираются из
-C++ версии (Android — Qt for Android). Пока существуют обе реализации,
-изменения протоколов, CLI и JSON вносятся в обе либо фиксируются как
-расхождение в `docs/architecture.md`.
-
+- `src/puls/cli`: parsing, configuration, orchestration, results, JSON,
+  rendering, запуск `puls-gui`;
+- `src/puls/application`: единая orchestration и модели для CLI/GUI
+  (`app::Runner`);
+- `src/puls/gui`: `model` — состояние и поведение dashboard без Qt;
+  `controller`, `run` и `qml/` — тонкий слой Qt Quick над моделью, тема,
+  lifecycle и безопасные preferences; `main.cpp` — программа `puls-gui`;
+- `src/puls/measure`: общий concurrency engine;
+- `src/puls/service`: `Backend`, `ConnectionInfoBackend`, общие types/helpers;
+- `src/puls/service/yandex`: только протокол Яндекса;
+- `src/puls/service/speedtestru`: только протокол speedtest.ru;
+- `src/puls/ui`: TTY, menu, colors, progress;
 - `src/puls/core`: `Context`/`CancelScope`, `Error`/`Result`, прерывания
   (Ctrl+C, SIGTERM), JSON, IP, text;
 - `src/puls/net`: HTTP/1.1, WebSocket и TLS с системными корнями;
-- `src/puls/{measure,service,application,ui,cli}` и
-  `src/puls/service/{yandex,speedtestru}` сохраняют границы Go-пакетов выше;
-- `src/puls/gui`: `model` — состояние и поведение dashboard без Qt;
-  `controller`, `run` и `qml/` — тонкий слой Qt Quick над моделью; `main.cpp`
-  — программа `puls-gui`;
-- `tests`: GoogleTest, `tests/support` — локальные HTTPS/WSS mocks.
+- `tests`: GoogleTest, `tests/support` — локальные HTTPS/WSS mocks;
+- `cmake`: общие опции, упаковка, overlay triplets и ports vcpkg, toolchain
+  Android;
+- `scripts`: direct installers; `scripts/release.py` — архивы выпуска,
+  manifest и checksums; `scripts/tests` — тесты инструмента выпуска и
+  установщиков;
+- `docs`: архитектура и выпуск.
+
+Передавай logger и внешние зависимости через constructors/options. Не добавляй
+global output, setter вида `set_verbose` или UI в `MeasurementConfig`. Общие
+лимиты и преобразования принадлежат `src/puls/service`; правила конкретного
+протокола не выноси туда.
 
 Правила C++:
 
@@ -107,7 +102,8 @@ C++ версии (Android — Qt for Android). Пока существуют о�
 - потоки workers всегда join-ятся; detached-поток допустим только для
   отменяемого DNS resolve;
 - зависимости добавляются только в `vcpkg.json`; `builtin-baseline` и
-  `VCPKG_COMMIT` в `.github/workflows/cpp.yml` меняются вместе;
+  `VCPKG_COMMIT` в `.github/workflows/cpp.yml` меняются вместе; baseline
+  обновляется при исправлениях безопасности OpenSSL, Boost и Qt;
 - код форматируется `clang-format` 18 по `.clang-format`; предупреждения
   компилятора в CI считаются ошибками.
 
@@ -124,7 +120,7 @@ C++ версии (Android — Qt for Android). Пока существуют о�
 6. Worker имеет не более одного reconnect; throughput целиком не повторяется.
 7. `duration` — 3–60 секунд, connections — 1–16, auto — не более 16.
 8. Cancellation немедленно закрывает network I/O; Ctrl+C завершается примерно
-   за секунду без goroutine leaks.
+   за секунду, все потоки workers завершены.
 9. Ошибка не превращается в успешные `0 Мбит/с`.
 10. Ошибка одного сервиса не останавливает `all`.
 
@@ -172,10 +168,10 @@ speedtest.ru:
 
 ## Ошибки и JSON
 
-Используй `ServiceID` (`service.ServiceID`), `Phase`, `Status`, `ErrorCode` и
-`*service.OpError`. Ошибка содержит service, phase, code, retryable и cause.
-Классифицируй через typed/sentinel errors, `errors.Is/As`, `context` и
-`net.Error`; не анализируй текст сообщения.
+Используй `service::ServiceId`, `Phase`, `Status`, `ErrorCode` и
+`service::OpError`. Ошибка содержит service, phase, code, retryable и cause.
+Классифицируй через теги и детали `Error` (`is`/`as`) и отмену `Context`; не
+анализируй текст сообщения.
 
 JSON schema 1 — единый envelope:
 
@@ -199,14 +195,13 @@ golden tests.
 
 ## GUI
 
-- C++: Qt 6 Quick/QML со стилем Material. Логику и тексты держи в
+- Qt 6 Quick/QML со стилем Material. Логику и тексты держи в
   `puls::gui::Dashboard`, QML только отображает свойства и вызывает методы
   `DashboardController`. События runner приходят из рабочего потока и
   передаются в UI-поток только queued-вызовом; Qt-типы между потоками не
   передаются.
-- Go: используй Fyne v2 и обновляй widgets из goroutine только через `fyne.Do`.
-- CLI и GUI обязаны вызывать `app::Runner` (`internal/application.Runner` в Go);
-  не дублируй orchestration, retry или преобразование результатов во frontend.
+- CLI и GUI обязаны вызывать `app::Runner`; не дублируй orchestration, retry
+  или преобразование результатов во frontend.
 - Сохраняй только тему, сервис, профиль, duration, connections, phase и размер
   окна. Не сохраняй IP, ISP, server, результаты, warnings, logs и credentials.
 - Держи один mobile-first dashboard без gauges и истории: cyan accent,
@@ -222,7 +217,7 @@ golden tests.
 2. Найди код и связанные тесты через `rg`.
 3. Сначала определи проверяемый invariant или regression test.
 4. Не перезаписывай несвязанные пользовательские изменения.
-5. Форматируй Go через `gofmt`, C++ — через `clang-format`.
+5. Форматируй C++ через `clang-format` 18.
 6. Сначала запускай targeted tests, затем полную проверку.
 7. Перечитай diff и проверь отсутствие secrets/generated artifacts.
 
@@ -234,24 +229,14 @@ tokens, production API responses или captures с персональными �
 Перед релизом обязательны:
 
 ```sh
-go test ./...
-go test -count=10 ./...
-go test -race ./...
-go vet ./...
-staticcheck ./...
-govulncheck ./...
-actionlint .github/workflows/*.yml
-shellcheck scripts/install.sh
-```
-
-C++ проверки:
-
-```sh
 cmake --preset debug && cmake --build --preset debug
 ctest --preset debug --repeat until-fail:10
 cmake --preset sanitize && cmake --build --preset sanitize && ctest --preset sanitize
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
 git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 --dry-run --Werror
+python3 -m unittest discover -s scripts/tests
+actionlint .github/workflows/*.yml
+shellcheck scripts/install.sh .github/scripts/*.sh
 ```
 
 Без vcpkg используй preset `system-debug` с системными Boost ≥ 1.83,
@@ -260,22 +245,24 @@ OpenSSL ≥ 3.0, Qt ≥ 6.4 и GTest; санитайзеры включает `-
 `QT_QPA_PLATFORM=offscreen`; `PULS_GUI_SCREENSHOTS=<dir>` сохраняет снимки
 экрана для проверки вёрстки. Live tests собираются с `-DPULS_LIVE_TESTS=ON`.
 Workflow `cpp.yml` обязан проходить для шести desktop targets (Linux, macOS
-и Windows на x64 и ARM64; Windows ARM64 — только CLI), Linux Clang, ASan+UBSan
-и TSan. Зависимости из vcpkg, включая Qt, линкуются статически, на Windows и
-CRT (overlay triplets в `cmake/triplets`), поэтому программам не нужны DLL;
-на Linux и macOS зависимости собираются только в Release. Linux с GUI
+и Windows на x64 и ARM64; Windows ARM64 — только CLI), Android, Linux Clang,
+ASan+UBSan и TSan. Зависимости из vcpkg, включая Qt, линкуются статически,
+на Windows и CRT (overlay triplets в `cmake/triplets`), поэтому программам не
+нужны DLL; на Linux и macOS зависимости собираются только в Release. Linux с GUI
 собирается в контейнере manylinux_2_28, чтобы программам хватало glibc 2.28.
 TSan собирается без Qt: неинструментированный Qt синхронизирует очередь
 событий через futex, и TSan даёт ложные срабатывания.
 
 Network tests используют local HTTP/WebSocket mocks и покрывают success, exact
 bytes, malformed frames/JSON, 401/403/5xx, disconnect, partial success,
-reconnect, deadline и cancellation. Live tests находятся за tag `live`;
-throughput запускается только с `PULS_LIVE_THROUGHPUT=1`.
+reconnect, deadline и cancellation. Live tests собираются только с
+`-DPULS_LIVE_TESTS=ON`; throughput запускается только с
+`PULS_LIVE_THROUGHPUT=1`.
 
-Системные dev-зависимости на ALT Workstation устанавливай в Distrobox. Fyne
-собирай и тестируй в `puls-fyne-dev`, PowerShell — в `puls-powershell-dev`;
-команды описаны в `docs/distribution.md`. Windows integration test обязателен в CI.
+Системные dev-зависимости на ALT Workstation устанавливай в Distrobox. C++ с
+системными библиотеками собирай и тестируй в `puls-dev`, PowerShell — в
+`puls-powershell-dev`; команды описаны в `docs/distribution.md`. Windows
+integration test установщика обязателен в CI.
 
 Выпуск обязан сохранять шесть desktop targets: `puls` и `puls-gui` для Linux,
 macOS и Windows на x64 и ARM64 и только CLI для Windows ARM64. Сохраняй
@@ -289,8 +276,9 @@ PATH/update/uninstall, управляемые shortcuts и ASCII without BOM д�
 
 - поведение соответствует задаче и протоколам;
 - mock/golden/regression tests обновлены;
-- test ×10, race/sanitizers, vet, clang-format и static/security checks прошли;
+- ctest ×10, ASan+UBSan, TSan, clang-format, actionlint, shellcheck и тесты
+  выпуска прошли;
 - help/docs совпадают с CLI и JSON;
-- installers и шесть release targets проверены;
+- installers, шесть desktop targets и APK проверены;
 - diff не содержит secrets и случайных artifacts;
 - live IP/ping и разрешённый acceptance throughput выполнены отдельно.

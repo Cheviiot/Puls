@@ -8,11 +8,8 @@
 
 ## Подготовка среды
 
-Puls переносится с Go на C++20. Новая реализация CLI, GUI на Qt Quick,
-протоколов и engine находится в `src/`; Android и release builder пока
-собираются из Go.
-
-### C++
+Puls написан на C++20: CLI, GUI на Qt Quick, протоколы и engine находятся в
+`src/`, тесты — в `tests/`.
 
 Нужны CMake 3.25+, Ninja, компилятор C++20 (GCC 13+, Clang 18+, Apple Clang
 из Xcode 16+ или MSVC 2022) и [vcpkg](https://github.com/microsoft/vcpkg).
@@ -60,43 +57,24 @@ cmake --build --preset system-debug
 ctest --preset system-debug
 ```
 
-### Go
-
-Нужна версия Go, указанная в `go.mod`.
-
-```bash
-git clone https://github.com/Cheviiot/Puls.git
-cd Puls
-go mod download
-go test ./...
-```
-
-На ALT Workstation desktop-зависимости Fyne запускаются в Distrobox-контейнере
-`puls-fyne-dev`; точные команды приведены в [distribution.md](../docs/distribution.md).
+На ALT Workstation системные зависимости ставятся в Distrobox-контейнер
+`puls-dev`; точные команды приведены в [distribution.md](../docs/distribution.md).
+Android-приложение собирает workflow `C++` с Qt for Android; его настройка
+описана там же.
 
 ## Перед pull request
 
-Для C++ (изменения QML проверяйте и по снимкам экрана:
-`PULS_GUI_SCREENSHOTS=<каталог> ./build/debug/tests/puls_gui_tests`):
+Изменения QML проверяйте и по снимкам экрана:
+`PULS_GUI_SCREENSHOTS=<каталог> ./build/debug/tests/puls_gui_tests`.
 
 ```bash
 git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 -i
 ctest --preset debug --repeat until-fail:10
 cmake --preset sanitize && cmake --build --preset sanitize && ctest --preset sanitize
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
-```
-
-Для Go:
-
-```bash
-gofmt -w ./cmd ./internal
-go test ./...
-go test -race ./...
-go vet ./...
-staticcheck ./...
-govulncheck ./...
+python3 -m unittest discover -s scripts/tests
 actionlint .github/workflows/*.yml
-shellcheck scripts/install.sh
+shellcheck scripts/install.sh .github/scripts/*.sh
 ```
 
 Изменение поведения должно сопровождаться тестом. Сетевые сценарии не должны попадать в обычные модульные тесты.
@@ -119,8 +97,7 @@ shellcheck scripts/install.sh
 ```bash
 cmake --preset debug -DPULS_LIVE_TESTS=ON && cmake --build --preset debug
 ctest --preset debug -R '^Live\.'
-go test -tags=live ./internal/service/...
-PULS_LIVE_THROUGHPUT=1 go test -tags=live -run Live ./internal/service/...
+PULS_LIVE_THROUGHPUT=1 ctest --preset debug -R '^Live\.'
 ```
 
 ## Коммиты и pull request

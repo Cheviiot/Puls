@@ -2,26 +2,35 @@
 
 ## Среда разработки на ALT
 
-Fyne-зависимости устанавливаются не на host, а в Distrobox:
+Системные зависимости устанавливаются не на host, а в Distrobox. Контейнер
+`puls-dev` собирает C++ версию с библиотеками Ubuntu 24.04 через preset
+`system-debug`:
 
 ```sh
-distrobox create --name puls-fyne-dev --image docker.io/library/ubuntu:24.04 --yes
-distrobox enter puls-fyne-dev -- sudo apt-get update
-distrobox enter puls-fyne-dev -- sudo apt-get install -y \
-  golang-go git gcc pkg-config libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+distrobox create --name puls-dev --image docker.io/library/ubuntu:24.04 --yes
+distrobox enter puls-dev -- sudo apt-get update
+distrobox enter puls-dev -- sudo apt-get install -y \
+  cmake ninja-build g++ git python3 shellcheck clang-format-18 \
+  libboost-dev libboost-json-dev libssl-dev libgtest-dev \
+  qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-controls \
+  qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtquick-templates \
+  qml6-module-qtqml-workerscript qt6-qpa-plugins
 ```
 
-Проверка и native Linux build:
+Сборка и проверка:
 
 ```sh
-distrobox enter puls-fyne-dev -- bash -lc 'cd "$PWD" && go test ./...'
-distrobox enter puls-fyne-dev -- bash -lc 'cd "$PWD" && go build ./cmd/puls'
+distrobox enter puls-dev -- bash -lc 'cd "$PWD" &&
+  cmake --preset system-debug && cmake --build --preset system-debug &&
+  QT_QPA_PLATFORM=offscreen ctest --preset system-debug &&
+  python3 -m unittest discover -s scripts/tests'
 ```
 
-CLI-only сборка не требует CGO:
+`install.ps1` проверяется в контейнере `puls-powershell-dev`:
 
 ```sh
-go build -tags nogui ./cmd/puls
+distrobox create --name puls-powershell-dev --image mcr.microsoft.com/powershell:latest --yes
+distrobox enter puls-powershell-dev -- bash -lc 'cd "$PWD" && pwsh -NoProfile -File scripts/install.ps1 -Help'
 ```
 
 ## Артефакты
@@ -81,8 +90,8 @@ PULS_ANDROID_KEY_PASSWORD
 ```
 
 Keystore не хранится в Git. Application ID `io.github.cheviiot.puls` и ключ
-прежних выпусков не меняются, поэтому APK обновляет установленную
-Go-версию. Код версии вычисляется из версии выпуска:
+прежних выпусков не меняются, поэтому APK обновляет установленное
+приложение. Код версии вычисляется из версии выпуска:
 `major * 1000000 + minor * 1000 + patch`.
 
 ## Выпуск
