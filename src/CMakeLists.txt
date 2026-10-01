@@ -174,10 +174,16 @@ if(PULS_BUILD_GUI)
             QT_ANDROID_VERSION_NAME "${PULS_VERSION}"
             QT_ANDROID_MIN_SDK_VERSION 28
             QT_ANDROID_TARGET_SDK_VERSION 36
+            # The APK is downloaded directly rather than from a store, so its
+            # libraries are compressed.
+            QT_ANDROID_LEGACY_PACKAGING ON
             QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/puls/gui/android")
         qt_add_android_permission(puls-gui NAME android.permission.INTERNET)
         # Devices with 16 KB memory pages load only libraries aligned for them.
-        target_link_options(puls-gui PRIVATE "LINKER:-z,max-page-size=16384")
+        # The NDK compiles with debug information, which the release package
+        # does not need.
+        target_link_options(puls-gui PRIVATE "LINKER:-z,max-page-size=16384"
+            "$<$<CONFIG:Release>:-Wl,--strip-debug>")
     endif()
     puls_configure_target(puls-gui)
     # On Android the APK is the package, so nothing is installed.

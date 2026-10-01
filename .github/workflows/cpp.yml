@@ -474,9 +474,11 @@ jobs:
           apk="${apks[0]}"
           echo "UNSIGNED_APK=$apk" >> "$GITHUB_ENV"
           ls -l "$apk"
+          echo "Самые большие файлы APK (байт в архиве):"
+          unzip -v "$apk" | awk '$2 ~ /^(Stored|Defl)/ { print $3, $NF }' | sort -n -r | head -20
           tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
           badging=$("$tools/aapt2" dump badging "$apk")
-          grep -E "^package:|^(min)?sdkVersion|^targetSdkVersion|^native-code|^application-label:" <<< "$badging"
+          grep -E "^package:|^(minSdkVersion|sdkVersion)|^targetSdkVersion|^native-code|^application-label:" <<< "$badging"
           grep -Fq "package: name='io.github.cheviiot.puls'" <<< "$badging"
           for abi in ${ANDROID_ABIS//;/ }; do
             if ! grep -E '^native-code:' <<< "$badging" | grep -Fq "'$abi'"; then
@@ -487,7 +489,7 @@ jobs:
           permissions=$("$tools/aapt2" dump permissions "$apk")
           printf '%s\n' "$permissions"
           grep -Fq 'android.permission.INTERNET' <<< "$permissions"
-          if grep -Eq 'ACCESS_(FINE|COARSE)_LOCATION|READ_PHONE_STATE|READ_CONTACTS|RECORD_AUDIO|CAMERA' <<< "$permissions"; then
+          if grep -Eq 'ACCESS_(FINE|COARSE)_LOCATION|READ_PHONE_STATE|READ_CONTACTS|RECORD_AUDIO|CAMERA|(READ|WRITE)_EXTERNAL_STORAGE' <<< "$permissions"; then
             echo "APK запрашивает лишние чувствительные разрешения" >&2
             exit 1
           fi
