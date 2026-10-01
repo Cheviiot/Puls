@@ -1,0 +1,5 @@
+# OpenSSL 3 reads its internal hash tables without a lock, under RCU that
+# synchronizes through atomics inside the library. The OpenSSL from vcpkg is
+# not built with ThreadSanitizer, which therefore reports these reads as
+# races with the locked writes.
+race:ossl_ht_get

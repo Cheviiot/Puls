@@ -21,8 +21,14 @@ function(puls_add_test name)
         # Function names in the stack of a crashed test on CI.
         target_link_options(${name} PRIVATE /DEBUG)
     endif()
+    set(test_properties TIMEOUT 120)
+    if("thread" IN_LIST PULS_SANITIZERS)
+        # Also reaches the puls processes that the CLI tests start.
+        list(APPEND test_properties ENVIRONMENT
+            "TSAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/tsan.supp")
+    endif()
     gtest_discover_tests(${name} DISCOVERY_MODE PRE_TEST DISCOVERY_TIMEOUT 60
-        PROPERTIES TIMEOUT 120)
+        PROPERTIES ${test_properties})
 endfunction()
 
 puls_add_test(puls_core_tests SOURCES core_test.cpp LIBRARIES Puls::core)

@@ -252,7 +252,8 @@ ASan+UBSan и TSan. Зависимости из vcpkg, включая Qt, лин
 нужны DLL; на Linux и macOS зависимости собираются только в Release. Linux с GUI
 собирается в контейнере manylinux_2_28, чтобы программам хватало glibc 2.28.
 TSan собирается без Qt: неинструментированный Qt синхронизирует очередь
-событий через futex, и TSan даёт ложные срабатывания.
+событий через futex, и TSan даёт ложные срабатывания. По той же причине
+`tests/tsan.supp` подавляет чтения OpenSSL из его хеш-таблиц под RCU.
 
 Network tests используют local HTTP/WebSocket mocks и покрывают success, exact
 bytes, malformed frames/JSON, 401/403/5xx, disconnect, partial success,
