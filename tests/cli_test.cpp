@@ -9,6 +9,7 @@
 #include "puls/ui/terminal.hpp"
 
 #include "support/fake_backend.hpp"
+#include "support/temporary_directory.hpp"
 
 #include <boost/json/serialize.hpp>
 #include <gtest/gtest.h>
@@ -22,7 +23,6 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
-#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -533,26 +533,7 @@ void set_environment(const char* name, const std::string& value) {
 #endif
 }
 
-class TemporaryDirectory {
-public:
-    TemporaryDirectory() {
-        std::random_device random;
-        path_ = std::filesystem::temp_directory_path() /
-                ("puls-test-" + std::to_string(random()) + std::to_string(random()));
-        std::filesystem::create_directories(path_);
-    }
-    TemporaryDirectory(const TemporaryDirectory&) = delete;
-    TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
-    ~TemporaryDirectory() {
-        std::error_code ignored;
-        std::filesystem::remove_all(path_, ignored);
-    }
-
-    [[nodiscard]] const std::filesystem::path& path() const { return path_; }
-
-private:
-    std::filesystem::path path_;
-};
+using testing::TemporaryDirectory;
 
 TEST(GuiLauncher, LooksForTheGuiNextToPulsFirst) {
     namespace fs = std::filesystem;

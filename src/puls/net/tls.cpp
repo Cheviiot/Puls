@@ -1,5 +1,7 @@
 #include "puls/net/tls.hpp"
 
+#include "puls/core/text.hpp"
+
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
@@ -9,6 +11,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -21,6 +24,35 @@
 namespace puls::net {
 
 namespace {
+
+// Adds the first PEM certificate of every regular file in directory; text
+// after the certificate, which Android appends, is ignored. Returns the
+// number of certificates added.
+int add_certificate_directory(X509_STORE* store, const std::filesystem::path& directory) {
+    int added = 0;
+    std::error_code error;
+    std::filesystem::directory_iterator entry(directory, error);
+    for (; !error && entry != std::filesystem::directory_iterator(); entry.increment(error)) {
+        std::error_code status_error;
+        if (!entry->is_regular_file(status_error)) {
+            continue;
+        }
+        // OpenSSL opens UTF-8 file names on Windows as well.
+        const std::u8string name = entry->path().u8string();
+        BIO* bio = BIO_new_file(reinterpret_cast<const char*>(name.c_str()), "r");
+        if (bio == nullptr) {
+            continue;
+        }
+        if (X509* certificate = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) {
+            X509_STORE_add_cert(store, certificate);
+            X509_free(certificate);
+            ++added;
+        }
+        BIO_free(bio);
+    }
+    ERR_clear_error();
+    return added;
+}
 
 #if defined(_WIN32) || defined(__APPLE__)
 void add_certificate(X509_STORE* store, const unsigned char* data, long size) {
@@ -118,9 +150,28 @@ void load_system_roots(SSL_CTX*, X509_STORE* store) {
     }
 }
 
+#elif defined(__ANDROID__)
+
+// The updatable store of Android 14 and newer, then the system store.
+constexpr std::string_view certificate_directories[] = {
+    "/apex/com.android.conscrypt/cacerts",
+    "/system/etc/security/cacerts",
+};
+
+// Android names the files by the subject hash of OpenSSL 0.9.8, which the
+// hashed directory lookup of OpenSSL 3 does not find, so every certificate
+// is added to the store. The updatable store replaces the system one.
+void load_system_roots(SSL_CTX*, X509_STORE* store) {
+    for (const std::string_view directory : certificate_directories) {
+        if (add_certificate_directory(store, std::filesystem::path(directory)) > 0) {
+            return;
+        }
+    }
+}
+
 #else
 
-// The same locations Go's crypto/x509 uses on Linux, BSD and Android.
+// The same locations Go's crypto/x509 uses on Linux and BSD.
 constexpr std::string_view certificate_files[] = {
     "/etc/ssl/certs/ca-certificates.crt",
     "/etc/pki/tls/certs/ca-bundle.crt",
@@ -134,7 +185,6 @@ constexpr std::string_view certificate_files[] = {
 constexpr std::string_view certificate_directories[] = {
     "/etc/ssl/certs",
     "/etc/pki/tls/certs",
-    "/system/etc/security/cacerts",
 };
 
 bool is_regular_file(const std::string& path) {
@@ -229,6 +279,13 @@ Result<std::shared_ptr<TlsContext>> TlsContext::create(const TlsOptions& options
     for (const auto& pem : options.extra_root_certificates) {
         if (Error error = add_pem_roots(store, pem)) {
             return error;
+        }
+    }
+    for (const auto& directory : options.root_certificate_directories) {
+        if (add_certificate_directory(store, directory) == 0) {
+            const std::u8string name = directory.u8string();
+            return Error::make("не удалось прочитать корневые сертификаты из " +
+                               text::quote(std::string(name.begin(), name.end())));
         }
     }
     ERR_clear_error();

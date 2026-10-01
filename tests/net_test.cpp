@@ -4,11 +4,14 @@
 #include "puls/net/websocket.hpp"
 
 #include "support/mock_server.hpp"
+#include "support/temporary_directory.hpp"
 
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 namespace puls::net {
@@ -329,6 +332,37 @@ TEST(Http, RejectsUntrustedCertificate) {
     ASSERT_FALSE(response);
     EXPECT_TRUE(text::contains(response.error().message(), "failed to verify certificate"))
         << response.error().message();
+}
+
+TEST(Http, TrustsEveryCertificateFileOfARootDirectory) {
+    // The layout of the Android store: one certificate per file, named by
+    // the subject hash of OpenSSL 0.9.8 and followed by its text dump.
+    const testing::TemporaryDirectory roots;
+    std::ofstream(roots.path() / "9d520b32.0", std::ios::binary)
+        << testing::test_certificate_pem() << "Certificate:\n    Data:\n";
+    std::ofstream(roots.path() / "notes.txt", std::ios::binary) << "not a certificate\n";
+    std::filesystem::create_directory(roots.path() / "nested.0");
+
+    TlsOptions tls_options;
+    tls_options.use_system_roots = false;
+    tls_options.root_certificate_directories = {roots.path()};
+    auto trusted = TlsContext::create(tls_options);
+    ASSERT_TRUE(trusted) << trusted.error().message();
+    MockServer server([](MockExchange& exchange) { exchange.respond(200); });
+    HttpClientOptions options;
+    options.tls = *trusted;
+    HttpSession session(options);
+    HttpRequest request;
+    request.url = parse_url(server.url("/"));
+    auto response = session.send(Context(), request);
+    ASSERT_TRUE(response) << response.error().message();
+    EXPECT_EQ(response->status_code(), 200);
+
+    const testing::TemporaryDirectory empty;
+    tls_options.root_certificate_directories = {empty.path()};
+    EXPECT_FALSE(TlsContext::create(tls_options));
+    tls_options.root_certificate_directories = {empty.path() / "missing"};
+    EXPECT_FALSE(TlsContext::create(tls_options));
 }
 
 TEST(Http, RejectsCertificateForAnotherHost) {
