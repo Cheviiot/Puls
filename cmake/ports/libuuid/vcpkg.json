@@ -1,0 +1,6 @@
+{
+  "name": "libuuid",
+  "version": "1.0.3",
+  "description": "Empty stand-in for libuuid, which the fontconfig port lists but fontconfig no longer uses",
+  "supports": "!osx & !windows"
+}

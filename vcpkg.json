@@ -7,6 +7,9 @@
   "license": "MIT",
   "builtin-baseline": "4cb050be2cfa7a947cdd2dd1a70e24b17774c979",
   "vcpkg-configuration": {
+    "overlay-ports": [
+      "cmake/ports"
+    ],
     "overlay-triplets": [
       "cmake/triplets"
     ]

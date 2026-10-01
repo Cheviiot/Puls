@@ -26,6 +26,12 @@ sudo apt-get install '^libxcb.*-dev' libx11-xcb-dev libglu1-mesa-dev libxrender-
   autoconf-archive automake libtool
 ```
 
+На macOS Qt из vcpkg требует autotools:
+
+```bash
+brew install autoconf autoconf-archive automake libtool
+```
+
 ```bash
 git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
 ~/vcpkg/bootstrap-vcpkg.sh -disableMetrics

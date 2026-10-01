@@ -6,9 +6,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
 #include <thread>
 
 namespace puls::yandex {
@@ -185,30 +188,35 @@ TEST(Yandex, DiscoveryPingAndDownloadProtocol) {
 }
 
 TEST(Yandex, PingIsSequentialPerCdnAndParallelAcrossCdns) {
-    std::atomic<int> active_a{0}, active_b{0}, max_a{0}, max_b{0}, active_total{0}, max_total{0};
-    const auto update_max = [](std::atomic<int>& maximum, int value) {
-        int previous = maximum.load();
-        while (value > previous && !maximum.compare_exchange_weak(previous, value)) {
-        }
-    };
+    std::mutex mutex;
+    std::condition_variable arrived;
+    int active_a = 0, active_b = 0, max_a = 0, max_b = 0, max_total = 0;
+    bool seen_a = false, seen_b = false;
     MockServer server([&](MockExchange& exchange) {
-        std::atomic<int>* active = nullptr;
-        std::atomic<int>* maximum = nullptr;
-        if (exchange.request().path == "/a") {
-            active = &active_a;
-            maximum = &max_a;
-        } else if (exchange.request().path == "/b") {
-            active = &active_b;
-            maximum = &max_b;
-        } else {
+        const bool is_a = exchange.request().path == "/a";
+        if (!is_a && exchange.request().path != "/b") {
             exchange.respond(404);
             return;
         }
-        update_max(*maximum, active->fetch_add(1) + 1);
-        update_max(max_total, active_total.fetch_add(1) + 1);
+        int& active = is_a ? active_a : active_b;
+        int& maximum = is_a ? max_a : max_b;
+        {
+            std::unique_lock lock(mutex);
+            ++active;
+            maximum = std::max(maximum, active);
+            max_total = std::max(max_total, active_a + active_b);
+            (is_a ? seen_a : seen_b) = true;
+            arrived.notify_all();
+            // The first request to each CDN waits for the other CDN, so the
+            // overlap does not depend on how fast connections are set up. A
+            // sequential implementation never satisfies the wait.
+            arrived.wait_for(lock, 3s, [&] { return seen_a && seen_b; });
+        }
         std::this_thread::sleep_for(15ms);
-        active->fetch_sub(1);
-        active_total.fetch_sub(1);
+        {
+            const std::lock_guard lock(mutex);
+            --active;
+        }
         exchange.respond(204);
     });
     Backend backend(test_options());
@@ -216,9 +224,10 @@ TEST(Yandex, PingIsSequentialPerCdnAndParallelAcrossCdns) {
     const auto result = backend.ping(Context());
     ASSERT_TRUE(result) << result.error().message();
     EXPECT_EQ(result->samples, 8);
-    EXPECT_EQ(max_a.load(), 1);
-    EXPECT_EQ(max_b.load(), 1);
-    EXPECT_GE(max_total.load(), 2);
+    const std::lock_guard lock(mutex);
+    EXPECT_EQ(max_a, 1);
+    EXPECT_EQ(max_b, 1);
+    EXPECT_EQ(max_total, 2);
 }
 
 TEST(Yandex, PingKeepsValidSamplesAfterOneRequestFails) {
