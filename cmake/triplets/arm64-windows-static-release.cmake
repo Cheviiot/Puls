@@ -12,6 +12,8 @@ set(VCPKG_BUILD_TYPE release)
 # and they return into themselves (an access violation in the TLS handshake).
 # The default threshold of one page, given after /Gs0, keeps the probe out
 # of small frames.
+# vcpkg requires the C and C++ flags together.
 if(PORT STREQUAL "openssl")
     set(VCPKG_C_FLAGS_RELEASE "/Gs4096")
+    set(VCPKG_CXX_FLAGS_RELEASE "/Gs4096")
 endif()
