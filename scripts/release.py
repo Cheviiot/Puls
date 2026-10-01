@@ -281,6 +281,10 @@ def assemble(version, output, targets=None, require_android=False, root=None):
 
 
 def main(argv=None):
+    # On Windows, pipes use the ANSI code page, which has no Cyrillic.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Сборка выпуска Puls")
     commands = parser.add_subparsers(dest="command", required=True)
     package_parser = commands.add_parser("package", help="упаковать установленные файлы")

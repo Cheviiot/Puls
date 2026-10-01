@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -119,6 +120,19 @@ class PackageTest(unittest.TestCase):
                 return
             with self.assertRaisesRegex(release.ReleaseError, "символические"):
                 release.package("1.2.3", "linux", "amd64", stage, self.directory)
+
+    def test_command_line_reports_in_utf8(self):
+        stage = make_stage(self.directory / "stage", "windows")
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "release.py"), "package",
+             "--version", "1.2.3", "--os", "windows", "--arch", "amd64",
+             "--stage", str(stage), "--output", str(self.directory / "dist")],
+            capture_output=True, env=environment)
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
+        self.assertIn("Готово", result.stdout.decode("utf-8"))
+        self.assertTrue((self.directory / "dist" / "Puls_1.2.3_windows_amd64.zip").is_file())
 
     def test_rejects_unsafe_versions(self):
         for version in ("", ".", "..", "1.0/../x", "1 0"):
