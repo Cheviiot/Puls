@@ -374,7 +374,9 @@ class PowerShellInstallerTest(InstallerTest):
         target = self.powershell_command(
             "(New-Object -ComObject WScript.Shell).CreateShortcut("
             f"'{shortcut}').TargetPath")
-        self.assertEqual(Path(target.stdout.strip()), install_dir / "puls-gui.exe")
+        # The shortcut keeps the long form of a temporary path that may be
+        # given in the 8.3 form.
+        self.assertTrue(os.path.samefile(target.stdout.strip(), install_dir / "puls-gui.exe"))
 
         result = self.powershell_command(install, **environment)
         self.assertEqual(result.returncode, 0, result.stderr)
