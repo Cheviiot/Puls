@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Puls
+GenericName=Проверка скорости интернета
+Comment=Измерение задержки, загрузки и отдачи
+Exec=puls-gui
+Icon=io.github.cheviiot.puls
+Terminal=false
+Categories=Network;Utility;
+Keywords=internet;speed;network;ping;

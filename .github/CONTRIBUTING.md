@@ -8,29 +8,73 @@
 
 ## Подготовка среды
 
-Нужна версия Go, указанная в `go.mod`.
+Puls написан на C++20: CLI, GUI на Qt Quick, протоколы и engine находятся в
+`src/`, тесты — в `tests/`.
+
+Нужны CMake 3.25+, Ninja, компилятор C++20 (GCC 13+, Clang 18+, Apple Clang
+из Xcode 16+ или MSVC 2022) и [vcpkg](https://github.com/microsoft/vcpkg).
+Зависимости из `vcpkg.json` устанавливаются при первой конфигурации; сборка Qt
+занимает заметное время, без GUI проект собирается с `-DPULS_BUILD_GUI=OFF`.
+На Linux для Qt из vcpkg нужны системные библиотеки X11:
 
 ```bash
-git clone https://github.com/Cheviiot/Puls.git
-cd Puls
-go mod download
-go test ./...
+sudo apt-get install '^libxcb.*-dev' libx11-xcb-dev libglu1-mesa-dev libxrender-dev \
+  libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libegl1-mesa-dev autoconf \
+  autoconf-archive automake libtool
 ```
 
-На ALT Workstation desktop-зависимости Fyne запускаются в Distrobox-контейнере
-`puls-fyne-dev`; точные команды приведены в [distribution.md](../docs/distribution.md).
+На macOS Qt из vcpkg требует autotools:
+
+```bash
+brew install autoconf autoconf-archive automake libtool
+```
+
+```bash
+git clone https://github.com/microsoft/vcpkg.git ~/vcpkg
+~/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+export VCPKG_ROOT=~/vcpkg
+
+cmake --preset debug
+cmake --build --preset debug
+ctest --preset debug
+```
+
+На Windows используйте preset `windows-debug` в Developer PowerShell для
+Visual Studio. Пути исходников, которые Qt генерирует при сборке, превышают
+MAX_PATH, если каталог vcpkg расположен глубоко; укажите короткий каталог
+сборки зависимостей: `-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/vb`.
+
+Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3, Qt 6.4+ и
+GoogleTest через preset `system-debug`:
+
+```bash
+sudo apt-get install cmake ninja-build g++ libboost-dev libboost-json-dev libssl-dev \
+  libgtest-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
+  qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-window \
+  qml6-module-qtquick-templates qml6-module-qtqml-workerscript qt6-qpa-plugins
+cmake --preset system-debug
+cmake --build --preset system-debug
+ctest --preset system-debug
+```
+
+На ALT Workstation системные зависимости ставятся в Distrobox-контейнер
+`puls-dev`; точные команды приведены в [distribution.md](../docs/distribution.md).
+Android-приложение собирает workflow `C++` с Qt for Android; его настройка
+описана там же.
 
 ## Перед pull request
 
+Изменения QML проверяйте и по снимкам экрана:
+`PULS_GUI_SCREENSHOTS=<каталог> ./build/debug/tests/puls_gui_tests`.
+
 ```bash
-gofmt -w ./cmd ./internal
-go test ./...
-go test -race ./...
-go vet ./...
-staticcheck ./...
-govulncheck ./...
+git ls-files '*.cpp' '*.hpp' | xargs clang-format-18 -i
+ctest --preset debug --repeat until-fail:10
+cmake --preset sanitize && cmake --build --preset sanitize && ctest --preset sanitize
+cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
+python3 -m unittest discover -s scripts/tests
 actionlint .github/workflows/*.yml
-shellcheck scripts/install.sh
+shellcheck scripts/install.sh .github/scripts/*.sh
 ```
 
 Изменение поведения должно сопровождаться тестом. Сетевые сценарии не должны попадать в обычные модульные тесты.
@@ -51,8 +95,9 @@ shellcheck scripts/install.sh
 Сетевые тесты запускаются отдельно:
 
 ```bash
-go test -tags=live ./internal/service/...
-PULS_LIVE_THROUGHPUT=1 go test -tags=live -run Live ./internal/service/...
+cmake --preset debug -DPULS_LIVE_TESTS=ON && cmake --build --preset debug
+ctest --preset debug -R '^Live\.'
+PULS_LIVE_THROUGHPUT=1 ctest --preset debug -R '^Live\.'
 ```
 
 ## Коммиты и pull request

@@ -1,0 +1,543 @@
+name: C++
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  # The release workflow builds and tests the packages with this workflow.
+  workflow_call:
+    inputs:
+      version:
+        description: Version of the packages
+        required: true
+        type: string
+    # The release signs the APK with the key of the published versions.
+    secrets:
+      PULS_ANDROID_KEYSTORE_BASE64:
+        required: true
+      PULS_ANDROID_KEYSTORE_PASSWORD:
+        required: true
+      PULS_ANDROID_KEY_ALIAS:
+        required: true
+      PULS_ANDROID_KEY_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+# github.workflow names the caller when the release workflow calls this one,
+# so the release run does not cancel or wait for the branch checks.
+concurrency:
+  group: cpp-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match builtin-baseline in vcpkg.json.
+  VCPKG_COMMIT: 4cb050be2cfa7a947cdd2dd1a70e24b17774c979
+  VCPKG_DISABLE_METRICS: "1"
+
+jobs:
+  format:
+    name: Форматирование C++
+    # Pushes already check pull requests opened from branches of this repository.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-format-18
+      - name: Check formatting
+        run: git ls-files -z '*.cpp' '*.hpp' | xargs -0 clang-format-18 --dry-run --Werror
+
+  release-tools:
+    name: Выпуск и установщики · ${{ matrix.name }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-24.04
+            python: python3
+          - name: macOS
+            os: macos-15
+            python: python3
+          - name: Windows
+            os: windows-2025
+            python: python
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check scripts and workflows
+        if: runner.os == 'Linux'
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          shellcheck scripts/install.sh .github/scripts/*.sh
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --location --silent --show-error --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" .github/workflows/*.yml
+      - name: Test the release tool and installers
+        run: ${{ matrix.python }} -m unittest discover -s scripts/tests -v
+
+  build:
+    name: ${{ matrix.name }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ${{ matrix.os }}
+    # Linux builds with the graphical interface run in manylinux_2_28 so that
+    # the executables need only glibc 2.28.
+    container: ${{ matrix.container }}
+    # The first build of Qt without a cached binary package takes most of it.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux · x64 · GUI
+            package-os: linux
+            package-arch: amd64
+            os: ubuntu-24.04
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            preset: release
+            triplet: x64-linux
+            gui: "ON"
+          - name: Linux · ARM64 · GUI
+            package-os: linux
+            package-arch: arm64
+            os: ubuntu-24.04-arm
+            container: quay.io/pypa/manylinux_2_28_aarch64
+            preset: release
+            triplet: arm64-linux
+            gui: "ON"
+          - name: Linux · Clang
+            os: ubuntu-24.04
+            preset: release
+            triplet: x64-linux
+            cc: clang-18
+            cxx: clang++-18
+            gui: "OFF"
+          - name: Linux · ASan и UBSan
+            os: ubuntu-24.04
+            preset: sanitize
+            triplet: x64-linux
+            cc: clang-18
+            cxx: clang++-18
+            gui: "OFF"
+          - name: Linux · TSan
+            os: ubuntu-24.04
+            preset: tsan
+            triplet: x64-linux
+            cc: clang-18
+            cxx: clang++-18
+            gui: "OFF"
+          - name: macOS · ARM64 · GUI
+            package-os: darwin
+            package-arch: arm64
+            os: macos-15
+            preset: release
+            triplet: arm64-osx
+            gui: "ON"
+          - name: macOS · x64 · GUI
+            package-os: darwin
+            package-arch: amd64
+            os: macos-15-intel
+            preset: release
+            triplet: x64-osx
+            gui: "ON"
+          - name: Windows · x64 · GUI
+            package-os: windows
+            package-arch: amd64
+            python: python
+            os: windows-2025
+            preset: windows-release
+            triplet: x64-windows-static-release
+            msvc-arch: x64
+            gui: "ON"
+          - name: Windows · ARM64
+            package-os: windows
+            package-arch: arm64
+            python: python
+            os: windows-11-arm
+            preset: windows-arm64-release
+            triplet: arm64-windows-static-release
+            msvc-arch: arm64
+            gui: "OFF"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install CMake and Ninja
+        uses: lukka/get-cmake@fffaaafeea488556c2c12dad60690008bc1caacb # v4.4.2
+      - name: Select compiler
+        if: matrix.cxx != ''
+        run: |
+          echo "CC=${{ matrix.cc }}" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.cxx }}" >> "$GITHUB_ENV"
+      - name: Install sanitizer runtime
+        if: matrix.preset == 'sanitize' || matrix.preset == 'tsan'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libclang-rt-18-dev
+      - name: Install Qt build dependencies (manylinux)
+        if: matrix.container != ''
+        run: |
+          .github/scripts/manylinux-dependencies.sh
+          # Python for the Meson builds of vcpkg ports.
+          echo "/opt/python/cp312-cp312/bin" >> "$GITHUB_PATH"
+      # Autotools for libb2, a dependency of qtbase.
+      - name: Install Qt build tools (macOS)
+        if: runner.os == 'macOS' && matrix.gui == 'ON'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install autoconf autoconf-archive automake libtool
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: ${{ matrix.msvc-arch }}
+      - name: Set up vcpkg
+        shell: bash
+        run: |
+          temp="${RUNNER_TEMP//\\//}"
+          git init --quiet "$temp/vcpkg"
+          git -C "$temp/vcpkg" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_COMMIT"
+          git -C "$temp/vcpkg" checkout --quiet FETCH_HEAD
+          mkdir -p "$temp/vcpkg-binary-cache"
+          {
+            echo "VCPKG_ROOT=$temp/vcpkg"
+            echo "VCPKG_BINARY_SOURCES=clear;files,$temp/vcpkg-binary-cache,readwrite"
+            # Paths of sources that Qt generates while building exceed
+            # MAX_PATH for MSVC under the default buildtrees directory.
+            if [ "$RUNNER_OS" = "Windows" ]; then
+              echo "VCPKG_CONFIGURE_ARGS=-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=${temp:0:2}/vb"
+            fi
+          } >> "$GITHUB_ENV"
+      - name: Bootstrap vcpkg
+        if: runner.os != 'Windows'
+        run: '"$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics'
+      - name: Bootstrap vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: '& "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics'
+      # Cache entries are immutable, so every run that builds new packages
+      # saves a new entry and later runs restore the newest one. A run that
+      # fails while installing dependencies still keeps what it has built.
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-${{ matrix.os }}-${{ matrix.container && 'manylinux' || 'host' }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-${{ matrix.os }}-${{ matrix.container && 'manylinux' || 'host' }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-
+            vcpkg-${{ matrix.os }}-${{ matrix.container && 'manylinux' || 'host' }}-${{ matrix.triplet }}-${{ matrix.cxx || 'default' }}-gui-${{ matrix.gui }}-
+      - name: Mark restored vcpkg packages
+        shell: bash
+        run: touch "${RUNNER_TEMP//\\//}/vcpkg-cache-restored"
+      # PowerShell splits an unquoted argument that starts with a dash at its
+      # first period, so the version is quoted.
+      - name: Configure
+        run: >-
+          cmake --preset ${{ matrix.preset }} -DPULS_WARNINGS_AS_ERRORS=ON -DPULS_SYSTEM_TLS_TESTS=ON
+          -DPULS_BUILD_GUI=${{ matrix.gui }} "-DPULS_VERSION=${{ inputs.version || 'dev' }}"
+          -DPULS_PORTABLE_INSTALL=${{ matrix.package-os && 'ON' || 'OFF' }} ${{ env.VCPKG_CONFIGURE_ARGS }}
+      - name: Find new vcpkg packages
+        id: vcpkg-new
+        if: always()
+        shell: bash
+        run: |
+          temp="${RUNNER_TEMP//\\//}"
+          marker="$temp/vcpkg-cache-restored"
+          if [ -f "$marker" ] && [ -n "$(find "$temp/vcpkg-binary-cache" -type f -newer "$marker" -print -quit)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+      # Saved before building so that a compile error does not discard the
+      # dependencies installed while configuring.
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-new.outputs.found == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        id: test
+        run: ctest --preset ${{ matrix.preset }}
+      # ctest shows only "Access violation" for a crashed test; the debugger
+      # prints the stack and the code of the first crashed test.
+      - name: Show the stack of a crashed test (Windows)
+        if: failure() && steps.test.outcome == 'failure' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          BUILD_DIR: build/${{ matrix.preset }}
+        run: |
+          $machine = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+          $cdb = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\Debuggers\$machine\cdb.exe"
+          if (-not (Test-Path $cdb)) {
+            Write-Output "cdb.exe не найден: $cdb"
+            exit 0
+          }
+          $failed = Get-Content "$env:BUILD_DIR/Testing/Temporary/LastTestsFailed.log" -TotalCount 1
+          $name = $failed.Split(':', 2)[1]
+          $script = Join-Path $env:RUNNER_TEMP 'cdb-crash.txt'
+          Set-Content -Path $script -Value @(
+            'sxe -c "r; kn 40; ub @pc L10; u @pc L4; q" av',
+            'g'
+          )
+          foreach ($exe in Get-ChildItem "$env:BUILD_DIR/tests" -Filter 'puls_*_tests.exe') {
+            $listed = & $exe.FullName --gtest_list_tests "--gtest_filter=$name"
+            if ($listed -match '^\s+\S') {
+              & $cdb -G -lines -cf $script $exe.FullName "--gtest_filter=$name"
+              break
+            }
+          }
+      # The tests render offscreen; the released program must also start
+      # with the platform plugin of the system and its static QML plugins.
+      - name: Start the GUI
+        if: matrix.package-os != '' && matrix.gui == 'ON'
+        shell: bash
+        run: |
+          build="build/${{ matrix.preset }}/src"
+          case "$RUNNER_OS" in
+            Linux)
+              gui="$build/puls-gui"
+              echo "Библиотеки системы, нужные puls-gui:"
+              readelf --dynamic "$gui" | grep NEEDED
+              Xvfb :99 -screen 0 1280x800x24 &
+              export DISPLAY=:99
+              sleep 2
+              ;;
+            macOS) gui="$build/Puls.app/Contents/MacOS/Puls" ;;
+            Windows) gui="$build/puls-gui.exe" ;;
+          esac
+          "$gui" --verbose &
+          pid=$!
+          sleep 10
+          if ! kill -0 "$pid" 2> /dev/null; then
+            status=0
+            wait "$pid" || status=$?
+            echo "puls-gui завершился раньше чем через 10 секунд, код $status" >&2
+            exit 1
+          fi
+          kill "$pid"
+          wait "$pid" || true
+      - name: Package
+        if: matrix.package-os != ''
+        shell: bash
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          cmake --install "build/${{ matrix.preset }}" --prefix "$stage" --strip
+          ${{ matrix.python || 'python3' }} scripts/release.py package \
+            --version "${{ inputs.version || 'dev' }}" \
+            --os ${{ matrix.package-os }} --arch ${{ matrix.package-arch }} \
+            --stage "$stage" --output dist
+      - name: Upload package
+        if: matrix.package-os != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-${{ matrix.package-os }}-${{ matrix.package-arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    # The first build of the dependencies for three ABIs takes most of it.
+    timeout-minutes: 120
+    env:
+      QT_VERSION: 6.11.2
+      # The NDK, SDK platform and build tools that Qt 6.11 is built and
+      # tested with.
+      ANDROID_NDK_VERSION: 27.2.12479018
+      ANDROID_PLATFORM: android-36
+      ANDROID_BUILD_TOOLS: 36.0.0
+      AQTINSTALL_VERSION: 3.3.0
+      AQTINSTALL_SHA256: e88dbd87226f276fdd5d05347a44578d390d93a7f176e9476fbda0a7c9635f69
+      # 32-bit x86 exists only in old emulators.
+      ANDROID_ABIS: arm64-v8a;armeabi-v7a;x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build
+      - name: Set up the Android SDK and JDK
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" "platforms;$ANDROID_PLATFORM" \
+            "build-tools;$ANDROID_BUILD_TOOLS" > /dev/null
+          ndk="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          test -f "$ndk/build/cmake/android.toolchain.cmake"
+          {
+            echo "ANDROID_NDK_ROOT=$ndk"
+            # The Android toolchain of vcpkg reads ANDROID_NDK_HOME.
+            echo "ANDROID_NDK_HOME=$ndk"
+            echo "JAVA_HOME=$JAVA_HOME_17_X64"
+          } >> "$GITHUB_ENV"
+      # aqtinstall checks the SHA-256 of every archive against the Qt
+      # repository.
+      - name: Install Qt for Android
+        run: |
+          wheel_dir="$RUNNER_TEMP/aqtinstall"
+          python3 -m pip download --quiet --no-deps --dest "$wheel_dir" "aqtinstall==$AQTINSTALL_VERSION"
+          wheel="$wheel_dir/aqtinstall-$AQTINSTALL_VERSION-py3-none-any.whl"
+          printf '%s  %s\n' "$AQTINSTALL_SHA256" "$wheel" | sha256sum --check --strict
+          python3 -m venv "$RUNNER_TEMP/aqtinstall-venv"
+          "$RUNNER_TEMP/aqtinstall-venv/bin/pip" install --quiet "$wheel"
+          aqt="$RUNNER_TEMP/aqtinstall-venv/bin/aqt"
+          qt_root="$RUNNER_TEMP/Qt"
+          "$aqt" install-qt linux android "$QT_VERSION" android_arm64_v8a --autodesktop --outputdir "$qt_root"
+          "$aqt" install-qt linux android "$QT_VERSION" android_armv7 --outputdir "$qt_root"
+          "$aqt" install-qt linux android "$QT_VERSION" android_x86_64 --outputdir "$qt_root"
+          deploy=$(find "$qt_root/$QT_VERSION" -maxdepth 3 -path '*/bin/androiddeployqt' -print -quit)
+          if [[ -z "$deploy" ]]; then
+            echo "Не найден Qt для компьютера с androiddeployqt" >&2
+            exit 1
+          fi
+          {
+            echo "QT_ANDROID_DIR=$qt_root/$QT_VERSION/android_arm64_v8a"
+            echo "QT_HOST_DIR=$(dirname "$(dirname "$deploy")")"
+          } >> "$GITHUB_ENV"
+      - name: Set up vcpkg
+        run: |
+          git init --quiet "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_COMMIT"
+          git -C "$RUNNER_TEMP/vcpkg" checkout --quiet FETCH_HEAD
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$RUNNER_TEMP/vcpkg-binary-cache"
+          {
+            echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg"
+            echo "VCPKG_BINARY_SOURCES=clear;files,$RUNNER_TEMP/vcpkg-binary-cache,readwrite"
+          } >> "$GITHUB_ENV"
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-android-${{ env.ANDROID_NDK_VERSION }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-android-${{ env.ANDROID_NDK_VERSION }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-
+            vcpkg-android-${{ env.ANDROID_NDK_VERSION }}-
+      - name: Mark restored vcpkg packages
+        run: touch "$RUNNER_TEMP/vcpkg-cache-restored"
+      # Qt configures the other ABIs as separate projects with the same
+      # chainloaded toolchain and the forwarded options; vcpkg installs the
+      # dependencies of each ABI while it is configured.
+      - name: Configure
+        run: >-
+          "$QT_ANDROID_DIR/bin/qt-cmake" -S . -B build/android -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DQT_HOST_PATH="$QT_HOST_DIR"
+          -DANDROID_SDK_ROOT="$ANDROID_HOME" -DANDROID_NDK_ROOT="$ANDROID_NDK_ROOT"
+          -DQT_CHAINLOAD_TOOLCHAIN_FILE="$PWD/cmake/android-toolchain.cmake"
+          -DQT_ANDROID_ABIS="$ANDROID_ABIS"
+          -DQT_ANDROID_MULTI_ABI_FORWARD_VARS="QT_CHAINLOAD_TOOLCHAIN_FILE;PULS_BUILD_TESTS;PULS_QT_FROM_VCPKG;PULS_WARNINGS_AS_ERRORS;PULS_VERSION"
+          -DPULS_BUILD_TESTS=OFF -DPULS_QT_FROM_VCPKG=OFF -DPULS_WARNINGS_AS_ERRORS=ON
+          -DPULS_VERSION=${{ inputs.version || 'dev' }}
+      - name: Build
+        run: cmake --build build/android --target apk
+      - name: Find new vcpkg packages
+        id: vcpkg-new
+        if: always()
+        run: |
+          marker="$RUNNER_TEMP/vcpkg-cache-restored"
+          if [ -f "$marker" ] && [ -n "$(find "$RUNNER_TEMP/vcpkg-binary-cache" -type f -newer "$marker" -print -quit)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-new.outputs.found == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+      - name: Check the APK
+        run: |
+          mapfile -t apks < <(find build/android -path '*/outputs/apk/release/*.apk' -print)
+          if [[ "${#apks[@]}" -ne 1 ]]; then
+            echo "Ожидался один APK, найдено: ${#apks[@]}" >&2
+            exit 1
+          fi
+          apk="${apks[0]}"
+          echo "UNSIGNED_APK=$apk" >> "$GITHUB_ENV"
+          ls -l "$apk"
+          echo "Самые большие файлы APK (байт в архиве):"
+          unzip -v "$apk" | awk '$2 ~ /^(Stored|Defl)/ { print $3, $NF }' | sort -n -r | head -20
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
+          badging=$("$tools/aapt2" dump badging "$apk")
+          grep -E "^package:|^(minSdkVersion|sdkVersion)|^targetSdkVersion|^native-code|^application-label:" <<< "$badging"
+          grep -Fq "package: name='io.github.cheviiot.puls'" <<< "$badging"
+          for abi in ${ANDROID_ABIS//;/ }; do
+            if ! grep -E '^native-code:' <<< "$badging" | grep -Fq "'$abi'"; then
+              echo "В APK нет библиотек для $abi" >&2
+              exit 1
+            fi
+          done
+          permissions=$("$tools/aapt2" dump permissions "$apk")
+          printf '%s\n' "$permissions"
+          grep -Fq 'android.permission.INTERNET' <<< "$permissions"
+          if grep -Eq 'ACCESS_(FINE|COARSE)_LOCATION|READ_PHONE_STATE|READ_CONTACTS|RECORD_AUDIO|CAMERA|(READ|WRITE)_EXTERNAL_STORAGE' <<< "$permissions"; then
+            echo "APK запрашивает лишние чувствительные разрешения" >&2
+            exit 1
+          fi
+          # Devices with 16 KB memory pages load only aligned libraries.
+          "$tools/zipalign" -c -P 16 4 "$apk"
+          libraries="$RUNNER_TEMP/apk-libraries"
+          unzip -q -o "$apk" 'lib/arm64-v8a/*.so' 'lib/x86_64/*.so' -d "$libraries"
+          readelf="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          for library in "$libraries"/lib/*/*.so; do
+            # The alignment is the last column of a LOAD segment.
+            while read -r segment; do
+              if (( ${segment##* } < 16384 )); then
+                echo "Библиотека не выровнена по 16 КБ: ${library#"$libraries"/}" >&2
+                exit 1
+              fi
+            done < <("$readelf" --program-headers --wide "$library" | grep -E '^ *LOAD ')
+          done
+      - name: Sign the APK
+        if: inputs.version != ''
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PULS_ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.PULS_ANDROID_KEY_PASSWORD }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASS" || -z "$KEY_ALIAS" || -z "$KEY_PASS" ]]; then
+            echo "Не заданы секреты подписи Android" >&2
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/puls-release.keystore"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
+          aligned="$RUNNER_TEMP/puls-aligned.apk"
+          "$tools/zipalign" -f -P 16 4 "$UNSIGNED_APK" "$aligned"
+          mkdir -p dist
+          apk="dist/Puls_${VERSION}_android.apk"
+          "$tools/apksigner" sign --ks "$keystore" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASS --key-pass env:KEY_PASS --out "$apk" "$aligned"
+          "$tools/apksigner" verify --verbose --print-certs "$apk"
+      - name: Upload APK
+        if: inputs.version != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 7

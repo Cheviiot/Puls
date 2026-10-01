@@ -4,7 +4,7 @@
 
 **Проверка скорости интернета в приложении и терминале**
 
-[![CI](https://github.com/Cheviiot/Puls/actions/workflows/ci.yml/badge.svg)](https://github.com/Cheviiot/Puls/actions/workflows/ci.yml)
+[![CI](https://github.com/Cheviiot/Puls/actions/workflows/cpp.yml/badge.svg)](https://github.com/Cheviiot/Puls/actions/workflows/cpp.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-2ea44f.svg)](LICENSE)
 
 </div>
@@ -27,7 +27,8 @@ irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1 | iex
 ```
 
 Установщик добавляет `puls` в `PATH` и создаёт ярлык приложения. Android APK
-доступен в [последнем релизе](https://github.com/Cheviiot/Puls/releases/latest).
+для Android 9 и новее доступен в
+[последнем релизе](https://github.com/Cheviiot/Puls/releases/latest).
 
 > Для обновления повторно выполните ту же команду установки.
 
@@ -51,6 +52,26 @@ curl -fsSL https://github.com/Cheviiot/Puls/releases/latest/download/install.sh 
 ```powershell
 & ([scriptblock]::Create((irm https://github.com/Cheviiot/Puls/releases/latest/download/install.ps1))) -Uninstall
 ```
+
+## Сборка из исходников
+
+Puls написан на C++20. CLI и GUI на Qt Quick собираются CMake и
+[vcpkg](https://github.com/microsoft/vcpkg):
+
+```sh
+export VCPKG_ROOT=~/vcpkg
+cmake --preset release
+cmake --build --preset release
+ctest --preset release
+./build/release/src/puls gui
+```
+
+Сборка создаёт CLI `puls` и графическое приложение `puls-gui`, которое
+запускает `puls gui`. Первая конфигурация собирает Qt и занимает заметное
+время; только CLI собирается с `-DPULS_BUILD_GUI=OFF`. На Windows используйте
+preset `windows-release` в Developer PowerShell для Visual Studio.
+Сборка Android-приложения с Qt for Android описана в
+[docs/distribution.md](docs/distribution.md#android).
 
 Puls не отправляет телеметрию и не сохраняет IP, результаты измерений, JWT или
 browser keys. Проект независимый и распространяется по лицензии [MIT](LICENSE).

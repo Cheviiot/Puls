@@ -10,6 +10,7 @@ update_path=1
 install_shortcut=1
 temporary_dir=""
 staged_binary=""
+staged_app=""
 profile_temp=""
 shortcut_temp=""
 profile_file=""
@@ -34,6 +35,9 @@ cleanup() {
   fi
   if [ -n "$staged_binary" ]; then
     rm -f -- "$staged_binary" || :
+  fi
+  if [ -n "$staged_app" ]; then
+    rm -rf -- "$staged_app" || :
   fi
   if [ -n "$profile_temp" ]; then
     rm -f -- "$profile_temp" || :
@@ -243,6 +247,7 @@ validate_macos_shortcut_target() {
 
 install_linux_shortcut() {
   icon_source=$1
+  gui_binary=$2
   [ "$install_shortcut" -eq 1 ] || return 0
   [ -n "${HOME:-}" ] || fail "не задан HOME; используйте --no-shortcut"
   data_home=${XDG_DATA_HOME:-$HOME/.local/share}
@@ -253,7 +258,7 @@ install_linux_shortcut() {
   icon_file=$icons_dir/io.github.cheviiot.puls.png
   # Dollar signs and backticks must remain literal in the desktop Exec value.
   # shellcheck disable=SC2016
-  escaped_exec=$(printf '%s' "$target_binary" | sed 's/\\/\\\\/g; s/"/\\"/g; s/`/\\`/g; s/\$/\\$/g; s/%/%%/g')
+  escaped_exec=$(printf '%s' "$gui_binary" | sed 's/\\/\\\\/g; s/"/\\"/g; s/`/\\`/g; s/\$/\\$/g; s/%/%%/g')
   shortcut_temp=$(mktemp "$applications_dir/.puls-desktop.XXXXXXXX") || \
     fail "не удалось подготовить ярлык Puls"
   {
@@ -261,7 +266,7 @@ install_linux_shortcut() {
     printf '%s\n' 'Type=Application'
     printf '%s\n' 'Name=Puls'
     printf '%s\n' 'Comment=Проверка скорости интернета'
-    printf 'Exec="%s" gui\n' "$escaped_exec"
+    printf 'Exec="%s"\n' "$escaped_exec"
     printf '%s\n' 'Icon=io.github.cheviiot.puls'
     printf '%s\n' 'Terminal=false'
     printf '%s\n' 'Categories=Network;Utility;'
@@ -275,40 +280,32 @@ install_linux_shortcut() {
   say "Puls добавлен в меню приложений."
 }
 
-install_macos_shortcut() {
-  icon_source=$1
+# puls-gui uses the X11 libraries of the system, and a missing one keeps the
+# window from opening, so the installer names it.
+report_missing_libraries() {
+  command -v ldd > /dev/null 2>&1 || return 0
+  missing_libraries=$(ldd "$1" 2> /dev/null | awk '$2 == "=>" && $3 == "not" { printf "%s ", $1 }')
+  [ -n "$missing_libraries" ] || return 0
+  say "Графическому интерфейсу не хватает библиотек системы: ${missing_libraries% }."
+  say "Установите их менеджером пакетов (в Ubuntu и Debian, например, libxcb-cursor0); CLI работает без них."
+}
+
+install_macos_app() {
+  app_source=$1
   [ "$install_shortcut" -eq 1 ] || return 0
   validate_macos_shortcut_target
-  app_bundle=$HOME/Applications/Puls.app
-  contents=$app_bundle/Contents
-  macos_dir=$contents/MacOS
-  resources_dir=$contents/Resources
-  mkdir -p "$macos_dir" "$resources_dir"
-  # Dollar signs and backticks must remain literal in the launcher path.
-  # shellcheck disable=SC2016
-  escaped_exec=$(printf '%s' "$target_binary" | sed 's/\\/\\\\/g; s/"/\\"/g; s/`/\\`/g; s/\$/\\$/g')
-  shortcut_temp=$(mktemp "$macos_dir/.puls-launcher.XXXXXXXX") || \
+  applications_dir=$HOME/Applications
+  app_bundle=$applications_dir/Puls.app
+  mkdir -p "$applications_dir"
+  staged_app=$(mktemp -d "$applications_dir/.Puls.app.XXXXXXXX") || \
     fail "не удалось подготовить приложение Puls"
-  printf '#!/bin/sh\nexec "%s" gui "$@"\n' "$escaped_exec" > "$shortcut_temp" || \
-    fail "не удалось записать launcher Puls"
-  chmod 0755 "$shortcut_temp"
-  mv -f "$shortcut_temp" "$macos_dir/Puls" || fail "не удалось установить launcher Puls"
-  shortcut_temp=""
-  cp "$icon_source" "$resources_dir/Icon.png" || fail "не удалось установить значок Puls"
-  cat > "$contents/Info.plist" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>Puls</string>
-<key>CFBundleIdentifier</key><string>io.github.cheviiot.puls</string>
-<key>CFBundleName</key><string>Puls</string>
-<key>CFBundleDisplayName</key><string>Puls</string>
-<key>PulsInstallerManaged</key><true/>
-<key>CFBundleIconFile</key><string>Icon.png</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>LSMinimumSystemVersion</key><string>10.15</string>
-</dict></plist>
-EOF
+  chmod 0755 "$staged_app"
+  cp -R "$app_source/." "$staged_app/" || fail "не удалось скопировать приложение Puls"
+  if [ -e "$app_bundle" ]; then
+    rm -rf -- "$app_bundle" || fail "не удалось заменить $app_bundle"
+  fi
+  mv "$staged_app" "$app_bundle" || fail "не удалось установить приложение Puls"
+  staged_app=""
   say "Puls добавлен в ~/Applications."
 }
 
@@ -320,10 +317,11 @@ usage() {
   sh install.sh [параметры]
 
 Параметры:
-  --version <value>      установить конкретную версию, например 0.3.0
+  --version <value>      установить конкретную версию, например 0.1.0
   --install-dir <path>   каталог установки · по умолчанию ~/.local/bin
   --no-path-update       не изменять конфигурацию командной оболочки
-  --no-shortcut          не создавать ярлык графического приложения
+  --no-shortcut          не добавлять Puls в меню приложений; на macOS не
+                         устанавливать Puls.app в ~/Applications
   --uninstall            удалить Puls из выбранного каталога
   -h, --help             показать эту справку
 EOF
@@ -393,14 +391,20 @@ if [ "$uninstall" -eq 1 ]; then
     command -v mktemp >/dev/null 2>&1 || fail "не найден mktemp"
   fi
   target_binary=$install_dir/puls
-  if [ -d "$target_binary" ]; then
-    fail "$target_binary является каталогом; удаление остановлено"
-  fi
+  target_gui=$install_dir/puls-gui
+  for target_file in "$target_binary" "$target_gui"; do
+    if [ -d "$target_file" ]; then
+      fail "$target_file является каталогом; удаление остановлено"
+    fi
+  done
   if [ -e "$target_binary" ] || [ -L "$target_binary" ]; then
     rm -f -- "$target_binary" || fail "не удалось удалить $target_binary"
     say "Puls удалён: $target_binary"
   else
     say "Puls уже удалён: $target_binary"
+  fi
+  if [ -e "$target_gui" ] || [ -L "$target_gui" ]; then
+    rm -f -- "$target_gui" || fail "не удалось удалить $target_gui"
   fi
   if [ "$update_path" -eq 1 ]; then
     remove_path_configuration
@@ -487,9 +491,12 @@ manifest_product=$(manifest_value product) || \
   fail "RELEASE_MANIFEST.json не содержит product"
 manifest_version=$(manifest_value version) || \
   fail "RELEASE_MANIFEST.json не содержит version"
-if { [ "$manifest_schema" != 1 ] && [ "$manifest_schema" != 2 ]; } || [ "$manifest_product" != Puls ]; then
-  fail "RELEASE_MANIFEST.json имеет неподдерживаемую schema"
-fi
+[ "$manifest_product" = Puls ] || fail "RELEASE_MANIFEST.json имеет неподдерживаемую schema"
+case "$manifest_schema" in
+  3) ;;
+  1|2) fail "выпуск в RELEASE_MANIFEST.json собран в прежнем формате; используйте install.sh из этого выпуска" ;;
+  *) fail "RELEASE_MANIFEST.json имеет неподдерживаемую schema" ;;
+esac
 
 case "$manifest_version" in
   ""|.|..|*[!0-9A-Za-z._-]*) \
@@ -501,7 +508,7 @@ elif [ "$manifest_version" != "$version" ]; then
   fail "версия RELEASE_MANIFEST.json не совпадает с запрошенной $version"
 fi
 
-if ! manifest_asset=$(awk -v wanted_os="$target_os" -v wanted_arch="$target_arch" -v schema="$manifest_schema" '
+if ! manifest_asset=$(awk -v wanted_os="$target_os" -v wanted_arch="$target_arch" '
   function reset_asset() {
     asset_os = ""
     asset_arch = ""
@@ -535,9 +542,9 @@ if ! manifest_asset=$(awk -v wanted_os="$target_os" -v wanted_arch="$target_arch
   in_asset && /^[[:space:]]*"gui",?[[:space:]]*$/ { asset_gui = 1; next }
   in_asset && /^[[:space:]]*\},?[[:space:]]*$/ {
     if (os_count != 1 || arch_count != 1 || file_count != 1 || sha_count != 1) invalid = 1
-    if (schema == 2 && kind_count != 1) invalid = 1
+    if (kind_count != 1) invalid = 1
     if (asset_os == wanted_os && asset_arch == wanted_arch) {
-      if (schema == 2 && (asset_kind != "archive" || asset_cli != 1)) invalid = 1
+      if (asset_kind != "archive" || asset_cli != 1) invalid = 1
       print asset_file " " asset_sha " " asset_gui
       matches++
     }
@@ -617,42 +624,77 @@ actual_manifest_checksum=$(printf '%s' "$actual_manifest_checksum" | tr '[:upper
 extract_dir=$temporary_dir/extracted
 mkdir -p "$extract_dir"
 package_dir=${asset%.tar.gz}
-binary_member=$package_dir/puls
-tar -xzf "$archive_path" -C "$extract_dir" "$binary_member" || \
-  fail "не удалось извлечь puls из пакета"
-binary_path=$extract_dir/$binary_member
-if [ ! -f "$binary_path" ] || [ -L "$binary_path" ]; then
-  fail "в архиве не найден обычный файл puls"
-fi
+tar -xzf "$archive_path" -C "$extract_dir" || fail "не удалось распаковать $asset"
+package_path=$extract_dir/$package_dir
+
+regular_file() {
+  [ -f "$1" ] && [ ! -L "$1" ]
+}
+
+binary_path=$package_path/puls
+regular_file "$binary_path" || fail "в архиве не найден обычный файл puls"
+gui_path=""
 icon_path=""
+app_path=""
 if [ "$asset_gui" -eq 1 ]; then
-  icon_member=$package_dir/assets/Icon.png
-  tar -xzf "$archive_path" -C "$extract_dir" "$icon_member" || \
-    fail "не удалось извлечь значок Puls из пакета"
-  icon_path=$extract_dir/$icon_member
-  if [ ! -f "$icon_path" ] || [ -L "$icon_path" ]; then
-    fail "в архиве не найден обычный файл Icon.png"
-  fi
+  case "$target_os" in
+    linux)
+      gui_path=$package_path/puls-gui
+      icon_path=$package_path/assets/Icon.png
+      regular_file "$gui_path" || fail "в архиве не найден обычный файл puls-gui"
+      regular_file "$icon_path" || fail "в архиве не найден обычный файл Icon.png"
+      ;;
+    darwin)
+      app_path=$package_path/Puls.app
+      if [ -L "$app_path" ] || [ ! -d "$app_path" ] || \
+        ! regular_file "$app_path/Contents/MacOS/Puls" || \
+        ! regular_file "$app_path/Contents/Info.plist" || \
+        [ -n "$(find "$app_path" -type l -print)" ] || \
+        ! grep -Fq '<string>io.github.cheviiot.puls</string>' "$app_path/Contents/Info.plist" || \
+        ! grep -Fq '<key>PulsInstallerManaged</key><true/>' "$app_path/Contents/Info.plist"; then
+        fail "в архиве нет корректного приложения Puls.app"
+      fi
+      ;;
+  esac
 fi
 
 mkdir -p "$install_dir"
+
+# Copies a program into the installation directory without leaving a
+# partially written file at the target path.
+install_program() {
+  program_source=$1
+  program_target=$2
+  [ ! -d "$program_target" ] || fail "$program_target является каталогом"
+  staged_binary=$(mktemp "$install_dir/.puls.XXXXXXXX") || \
+    fail "каталог установки недоступен: $install_dir"
+  cp "$program_source" "$staged_binary"
+  chmod 0755 "$staged_binary"
+  mv -f "$staged_binary" "$program_target"
+  staged_binary=""
+}
+
 target_binary=$install_dir/puls
+target_gui=$install_dir/puls-gui
 [ ! -d "$target_binary" ] || fail "$target_binary является каталогом"
+[ -z "$gui_path" ] || [ ! -d "$target_gui" ] || fail "$target_gui является каталогом"
 install_action=установлен
 if [ -e "$target_binary" ] || [ -L "$target_binary" ]; then
   install_action=обновлён
 fi
-staged_binary=$(mktemp "$install_dir/.puls.XXXXXXXX") || fail "каталог установки недоступен: $install_dir"
-cp "$binary_path" "$staged_binary"
-chmod 0755 "$staged_binary"
-mv -f "$staged_binary" "$target_binary"
-staged_binary=""
+install_program "$binary_path" "$target_binary"
+if [ -n "$gui_path" ]; then
+  install_program "$gui_path" "$target_gui"
+fi
 
 say "Puls $version $install_action: $target_binary"
 add_path_configuration
 if [ "$asset_gui" -eq 1 ]; then
   case "$target_os" in
-    linux) install_linux_shortcut "$icon_path" ;;
-    darwin) install_macos_shortcut "$icon_path" ;;
+    linux)
+      install_linux_shortcut "$icon_path" "$target_gui"
+      report_missing_libraries "$target_gui"
+      ;;
+    darwin) install_macos_app "$app_path" ;;
   esac
 fi

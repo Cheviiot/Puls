@@ -4,11 +4,11 @@
 *.apk
 *.keystore
 *.jks
-/coverage.out
-/coverage.html
+/build/
+/out/
+/vcpkg_installed/
+CMakeUserPresets.json
 
-*.test
-*.prof
 .DS_Store
 Thumbs.db
 
@@ -18,3 +18,6 @@ Thumbs.db
 
 .idea/
 .vscode/
+
+# Python bytecode of the release tools.
+__pycache__/

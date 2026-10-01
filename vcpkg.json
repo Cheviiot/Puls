@@ -1,0 +1,90 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "puls",
+  "version-string": "dev",
+  "description": "Internet latency and throughput measurement through Yandex Internetometer and speedtest.ru",
+  "homepage": "https://github.com/Cheviiot/Puls",
+  "license": "MIT",
+  "builtin-baseline": "4cb050be2cfa7a947cdd2dd1a70e24b17774c979",
+  "vcpkg-configuration": {
+    "overlay-ports": [
+      "cmake/ports"
+    ],
+    "overlay-triplets": [
+      "cmake/triplets"
+    ]
+  },
+  "dependencies": [
+    {
+      "name": "boost-asio",
+      "features": [
+        "ssl"
+      ]
+    },
+    "boost-beast",
+    "boost-json",
+    "openssl"
+  ],
+  "features": {
+    "tests": {
+      "description": "Build unit and integration tests",
+      "dependencies": [
+        "gtest"
+      ]
+    },
+    "gui": {
+      "description": "Qt Quick graphical interface",
+      "dependencies": [
+        {
+          "name": "dbus",
+          "default-features": false,
+          "platform": "linux"
+        },
+        {
+          "name": "fontconfig",
+          "default-features": false,
+          "platform": "linux"
+        },
+        {
+          "name": "qtbase",
+          "default-features": false,
+          "features": [
+            "freetype",
+            "gui",
+            "harfbuzz",
+            "png",
+            "thread",
+            {
+              "name": "dbus",
+              "platform": "linux"
+            },
+            {
+              "name": "dnslookup",
+              "platform": "osx"
+            },
+            {
+              "name": "fontconfig",
+              "platform": "linux"
+            },
+            {
+              "name": "opengl",
+              "platform": "!ios"
+            },
+            {
+              "name": "xcb",
+              "platform": "linux"
+            },
+            {
+              "name": "xkb",
+              "platform": "linux"
+            }
+          ]
+        },
+        {
+          "name": "qtdeclarative",
+          "default-features": false
+        }
+      ]
+    }
+  }
+}
