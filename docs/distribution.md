@@ -59,9 +59,19 @@ application ID `io.github.cheviiot.puls`.
 используйте установщик соответствующего выпуска. PowerShell-скрипт обязан
 оставаться ASCII without BOM для Windows PowerShell 5.
 
-## Android signing
+## Android
 
-Repository secrets:
+Workflow `C++` собирает APK из той же C++ версии: Qt for Android 6.11.2
+(aqtinstall сверяет SHA-256 архивов с репозиторием Qt), Android NDK r27c,
+SDK platform 36, build-tools 36.0.0 и JDK 17. Один APK содержит библиотеки
+для arm64-v8a, armeabi-v7a и x86_64 и требует Android 9 (API 28). Qt собирает
+каждый ABI отдельным проектом; `cmake/android-toolchain.cmake` выбирает для
+него triplet vcpkg из `cmake/triplets`, и vcpkg собирает Boost и OpenSSL.
+
+Workflow проверяет имя пакета, ABI, разрешения (приложению нужен только
+доступ в сеть) и выравнивание библиотек по 16 КБ. При выпуске APK
+выравнивается `zipalign`, подписывается `apksigner` и проверяется. Ключ
+подписи хранится в repository secrets:
 
 ```text
 PULS_ANDROID_KEYSTORE_BASE64
@@ -70,17 +80,15 @@ PULS_ANDROID_KEY_ALIAS
 PULS_ANDROID_KEY_PASSWORD
 ```
 
-Keystore не хранится в Git. Workflow проверяет подпись APK и отклоняет
-неожиданные чувствительные permissions; приложению нужен только доступ в сеть.
-Fyne сначала создаёт подписанный Android App Bundle, затем проверенный по
-SHA-256 `bundletool` формирует из него подписанный universal APK для прямой
-установки вне магазина приложений.
+Keystore не хранится в Git. Application ID `io.github.cheviiot.puls` и ключ
+прежних выпусков не меняются, поэтому APK обновляет установленную
+Go-версию. Код версии вычисляется из версии выпуска:
+`major * 1000000 + minor * 1000 + patch`.
 
 ## Выпуск
 
 1. Все проверки `main` должны пройти.
-2. Добавить раздел версии в CHANGELOG и обновить `cmd/puls/FyneApp.toml` для
-   Android.
+2. Добавить раздел версии в CHANGELOG.
 3. Запустить release workflow вручную с версией: preflight собирает и
    проверяет все артефакты без публикации.
 4. Создать неизменяемый тег версии, например `v0.4.0`.

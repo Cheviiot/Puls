@@ -69,8 +69,8 @@ ctest --preset release
 запускает `puls gui`. Первая конфигурация собирает Qt и занимает заметное
 время; только CLI собирается с `-DPULS_BUILD_GUI=OFF`. На Windows используйте
 preset `windows-release` в Developer PowerShell для Visual Studio.
-Android-приложение пока собирается из Go-версии; подробности — в
-[CONTRIBUTING](.github/CONTRIBUTING.md).
+Сборка Android-приложения с Qt for Android описана в
+[docs/distribution.md](docs/distribution.md#android).
 
 Puls не отправляет телеметрию и не сохраняет IP, результаты измерений, JWT или
 browser keys. Проект независимый и распространяется по лицензии [MIT](LICENSE).

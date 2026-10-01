@@ -98,15 +98,18 @@ add_library(Puls::cli ALIAS puls_cli)
 target_link_libraries(puls_cli PUBLIC Puls::application Puls::ui)
 puls_configure_target(puls_cli)
 
-add_executable(puls puls/cli/main.cpp)
-target_link_libraries(puls PRIVATE Puls::cli)
-target_compile_definitions(puls PRIVATE PULS_VERSION="${PULS_VERSION}")
-if(WIN32)
-    target_link_libraries(puls PRIVATE shell32)
-    puls_add_windows_resources(puls "puls.exe" "Puls — проверка скорости интернета")
+# Android has only the graphical application.
+if(NOT ANDROID)
+    add_executable(puls puls/cli/main.cpp)
+    target_link_libraries(puls PRIVATE Puls::cli)
+    target_compile_definitions(puls PRIVATE PULS_VERSION="${PULS_VERSION}")
+    if(WIN32)
+        target_link_libraries(puls PRIVATE shell32)
+        puls_add_windows_resources(puls "puls.exe" "Puls — проверка скорости интернета")
+    endif()
+    puls_configure_target(puls)
+    install(TARGETS puls RUNTIME DESTINATION "${PULS_INSTALL_BINDIR}")
 endif()
-puls_configure_target(puls)
-install(TARGETS puls RUNTIME DESTINATION "${PULS_INSTALL_BINDIR}")
 
 if(PULS_BUILD_GUI)
     # Qt Quick dashboard over the dashboard model.
@@ -136,9 +139,11 @@ if(PULS_BUILD_GUI)
     qt_add_executable(puls-gui WIN32 MACOSX_BUNDLE puls/gui/main.cpp)
     target_link_libraries(puls-gui PRIVATE Puls::gui Puls::ui)
     target_compile_definitions(puls-gui PRIVATE PULS_VERSION="${PULS_VERSION}")
+    # The QML imports decide which QML plugins are linked statically or
+    # deployed into the Android package.
+    set_target_properties(puls-gui PROPERTIES
+        QT_QML_ROOT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/puls/gui/qml")
     if(PULS_QT_STATIC)
-        set_target_properties(puls-gui PROPERTIES
-            QT_QML_ROOT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/puls/gui/qml")
         qt_import_qml_plugins(puls-gui)
         if(TARGET Qt6::QXcbGlxIntegrationPlugin)
             qt_import_plugins(puls-gui
@@ -149,6 +154,26 @@ if(PULS_BUILD_GUI)
         puls_add_windows_resources(puls-gui "puls-gui.exe" "Puls — проверка скорости интернета")
     elseif(APPLE)
         puls_configure_macos_bundle(puls-gui)
+    elseif(ANDROID)
+        math(EXPR puls_version_code
+            "${PULS_VERSION_MAJOR} * 1000000 + ${PULS_VERSION_MINOR} * 1000 + ${PULS_VERSION_PATCH}")
+        if(puls_version_code LESS 1)
+            set(puls_version_code 1)
+        endif()
+        # The package name and the signing key of the Go version let the
+        # APK update it in place.
+        set_target_properties(puls-gui PROPERTIES
+            QT_ANDROID_PACKAGE_NAME io.github.cheviiot.puls
+            QT_ANDROID_APP_NAME Puls
+            QT_ANDROID_APP_ICON "@mipmap/ic_launcher"
+            QT_ANDROID_VERSION_CODE ${puls_version_code}
+            QT_ANDROID_VERSION_NAME "${PULS_VERSION}"
+            QT_ANDROID_MIN_SDK_VERSION 28
+            QT_ANDROID_TARGET_SDK_VERSION 36
+            QT_ANDROID_PACKAGE_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/puls/gui/android")
+        qt_add_android_permission(puls-gui NAME android.permission.INTERNET)
+        # Devices with 16 KB memory pages load only libraries aligned for them.
+        target_link_options(puls-gui PRIVATE "LINKER:-z,max-page-size=16384")
     endif()
     puls_configure_target(puls-gui)
     install(TARGETS puls-gui

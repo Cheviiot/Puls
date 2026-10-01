@@ -12,6 +12,16 @@ on:
         description: Version of the packages
         required: true
         type: string
+    # The release signs the APK with the key of the published versions.
+    secrets:
+      PULS_ANDROID_KEYSTORE_BASE64:
+        required: true
+      PULS_ANDROID_KEYSTORE_PASSWORD:
+        required: true
+      PULS_ANDROID_KEY_ALIAS:
+        required: true
+      PULS_ANDROID_KEY_PASSWORD:
+        required: true
 
 permissions:
   contents: read
@@ -307,5 +317,193 @@ jobs:
         with:
           name: package-${{ matrix.package-os }}-${{ matrix.package-arch }}
           path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    # The first build of the dependencies for three ABIs takes most of it.
+    timeout-minutes: 120
+    env:
+      QT_VERSION: 6.11.2
+      # The NDK, SDK platform and build tools that Qt 6.11 is built and
+      # tested with.
+      ANDROID_NDK_VERSION: 27.2.12479018
+      ANDROID_PLATFORM: android-36
+      ANDROID_BUILD_TOOLS: 36.0.0
+      AQTINSTALL_VERSION: 3.3.0
+      AQTINSTALL_SHA256: e88dbd87226f276fdd5d05347a44578d390d93a7f176e9476fbda0a7c9635f69
+      # 32-bit x86 exists only in old emulators.
+      ANDROID_ABIS: arm64-v8a;armeabi-v7a;x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build
+      - name: Set up the Android SDK and JDK
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" "platforms;$ANDROID_PLATFORM" \
+            "build-tools;$ANDROID_BUILD_TOOLS" > /dev/null
+          ndk="$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          test -f "$ndk/build/cmake/android.toolchain.cmake"
+          {
+            echo "ANDROID_NDK_ROOT=$ndk"
+            # The Android toolchain of vcpkg reads ANDROID_NDK_HOME.
+            echo "ANDROID_NDK_HOME=$ndk"
+            echo "JAVA_HOME=$JAVA_HOME_17_X64"
+          } >> "$GITHUB_ENV"
+      # aqtinstall checks the SHA-256 of every archive against the Qt
+      # repository.
+      - name: Install Qt for Android
+        run: |
+          wheel_dir="$RUNNER_TEMP/aqtinstall"
+          python3 -m pip download --quiet --no-deps --dest "$wheel_dir" "aqtinstall==$AQTINSTALL_VERSION"
+          wheel="$wheel_dir/aqtinstall-$AQTINSTALL_VERSION-py3-none-any.whl"
+          printf '%s  %s\n' "$AQTINSTALL_SHA256" "$wheel" | sha256sum --check --strict
+          python3 -m venv "$RUNNER_TEMP/aqtinstall-venv"
+          "$RUNNER_TEMP/aqtinstall-venv/bin/pip" install --quiet "$wheel"
+          aqt="$RUNNER_TEMP/aqtinstall-venv/bin/aqt"
+          qt_root="$RUNNER_TEMP/Qt"
+          "$aqt" install-qt linux android "$QT_VERSION" android_arm64_v8a --autodesktop --outputdir "$qt_root"
+          "$aqt" install-qt linux android "$QT_VERSION" android_armv7 --outputdir "$qt_root"
+          "$aqt" install-qt linux android "$QT_VERSION" android_x86_64 --outputdir "$qt_root"
+          deploy=$(find "$qt_root/$QT_VERSION" -maxdepth 3 -path '*/bin/androiddeployqt' -print -quit)
+          if [[ -z "$deploy" ]]; then
+            echo "Не найден Qt для компьютера с androiddeployqt" >&2
+            exit 1
+          fi
+          {
+            echo "QT_ANDROID_DIR=$qt_root/$QT_VERSION/android_arm64_v8a"
+            echo "QT_HOST_DIR=$(dirname "$(dirname "$deploy")")"
+          } >> "$GITHUB_ENV"
+      - name: Set up vcpkg
+        run: |
+          git init --quiet "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" fetch --quiet --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_COMMIT"
+          git -C "$RUNNER_TEMP/vcpkg" checkout --quiet FETCH_HEAD
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          mkdir -p "$RUNNER_TEMP/vcpkg-binary-cache"
+          {
+            echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg"
+            echo "VCPKG_BINARY_SOURCES=clear;files,$RUNNER_TEMP/vcpkg-binary-cache,readwrite"
+          } >> "$GITHUB_ENV"
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: vcpkg-android-${{ env.ANDROID_NDK_VERSION }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vcpkg-android-${{ env.ANDROID_NDK_VERSION }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'cmake/ports/**', 'cmake/triplets/*.cmake') }}-
+            vcpkg-android-${{ env.ANDROID_NDK_VERSION }}-
+      - name: Mark restored vcpkg packages
+        run: touch "$RUNNER_TEMP/vcpkg-cache-restored"
+      # Qt configures the other ABIs as separate projects with the same
+      # chainloaded toolchain and the forwarded options; vcpkg installs the
+      # dependencies of each ABI while it is configured.
+      - name: Configure
+        run: >-
+          "$QT_ANDROID_DIR/bin/qt-cmake" -S . -B build/android -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DQT_HOST_PATH="$QT_HOST_DIR"
+          -DANDROID_SDK_ROOT="$ANDROID_HOME" -DANDROID_NDK_ROOT="$ANDROID_NDK_ROOT"
+          -DQT_CHAINLOAD_TOOLCHAIN_FILE="$PWD/cmake/android-toolchain.cmake"
+          -DQT_ANDROID_ABIS="$ANDROID_ABIS"
+          -DQT_ANDROID_MULTI_ABI_FORWARD_VARS="QT_CHAINLOAD_TOOLCHAIN_FILE;PULS_BUILD_TESTS;PULS_QT_FROM_VCPKG;PULS_WARNINGS_AS_ERRORS;PULS_VERSION"
+          -DPULS_BUILD_TESTS=OFF -DPULS_QT_FROM_VCPKG=OFF -DPULS_WARNINGS_AS_ERRORS=ON
+          -DPULS_VERSION=${{ inputs.version || 'dev' }}
+      - name: Build
+        run: cmake --build build/android --target apk
+      - name: Find new vcpkg packages
+        id: vcpkg-new
+        if: always()
+        run: |
+          marker="$RUNNER_TEMP/vcpkg-cache-restored"
+          if [ -f "$marker" ] && [ -n "$(find "$RUNNER_TEMP/vcpkg-binary-cache" -type f -newer "$marker" -print -quit)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save vcpkg packages
+        if: always() && steps.vcpkg-new.outputs.found == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vcpkg-binary-cache
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+      - name: Check the APK
+        run: |
+          mapfile -t apks < <(find build/android -path '*/outputs/apk/release/*.apk' -print)
+          if [[ "${#apks[@]}" -ne 1 ]]; then
+            echo "Ожидался один APK, найдено: ${#apks[@]}" >&2
+            exit 1
+          fi
+          apk="${apks[0]}"
+          echo "UNSIGNED_APK=$apk" >> "$GITHUB_ENV"
+          ls -l "$apk"
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
+          badging=$("$tools/aapt2" dump badging "$apk")
+          grep -E "^package:|^(min)?sdkVersion|^targetSdkVersion|^native-code|^application-label:" <<< "$badging"
+          grep -Fq "package: name='io.github.cheviiot.puls'" <<< "$badging"
+          for abi in ${ANDROID_ABIS//;/ }; do
+            if ! grep -E '^native-code:' <<< "$badging" | grep -Fq "'$abi'"; then
+              echo "В APK нет библиотек для $abi" >&2
+              exit 1
+            fi
+          done
+          permissions=$("$tools/aapt2" dump permissions "$apk")
+          printf '%s\n' "$permissions"
+          grep -Fq 'android.permission.INTERNET' <<< "$permissions"
+          if grep -Eq 'ACCESS_(FINE|COARSE)_LOCATION|READ_PHONE_STATE|READ_CONTACTS|RECORD_AUDIO|CAMERA' <<< "$permissions"; then
+            echo "APK запрашивает лишние чувствительные разрешения" >&2
+            exit 1
+          fi
+          # Devices with 16 KB memory pages load only aligned libraries.
+          "$tools/zipalign" -c -P 16 4 "$apk"
+          libraries="$RUNNER_TEMP/apk-libraries"
+          unzip -q -o "$apk" 'lib/arm64-v8a/*.so' 'lib/x86_64/*.so' -d "$libraries"
+          readelf="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          for library in "$libraries"/lib/*/*.so; do
+            # The alignment is the last column of a LOAD segment.
+            while read -r segment; do
+              if (( ${segment##* } < 16384 )); then
+                echo "Библиотека не выровнена по 16 КБ: ${library#"$libraries"/}" >&2
+                exit 1
+              fi
+            done < <("$readelf" --program-headers --wide "$library" | grep -E '^ *LOAD ')
+          done
+      - name: Sign the APK
+        if: inputs.version != ''
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PULS_ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.PULS_ANDROID_KEY_PASSWORD }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASS" || -z "$KEY_ALIAS" || -z "$KEY_PASS" ]]; then
+            echo "Не заданы секреты подписи Android" >&2
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/puls-release.keystore"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS"
+          aligned="$RUNNER_TEMP/puls-aligned.apk"
+          "$tools/zipalign" -f -P 16 4 "$UNSIGNED_APK" "$aligned"
+          mkdir -p dist
+          apk="dist/Puls_${VERSION}_android.apk"
+          "$tools/apksigner" sign --ks "$keystore" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASS --key-pass env:KEY_PASS --out "$apk" "$aligned"
+          "$tools/apksigner" verify --verbose --print-certs "$apk"
+      - name: Upload APK
+        if: inputs.version != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-apk
+          path: dist/*.apk
           if-no-files-found: error
           retention-days: 7

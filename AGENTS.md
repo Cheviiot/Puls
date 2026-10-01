@@ -82,9 +82,10 @@ global output, setter вида `SetVerbose` или UI в `MeasurementConfig`. О
 
 Проект переносится на C++20: CMake ≥ 3.25, vcpkg manifest, Boost.Asio/Beast/JSON,
 OpenSSL 3, Qt 6 Quick и GoogleTest. `src/puls` уже содержит CLI, GUI,
-application, engine и оба протокола; сборка Android и release builder пока
-остаются в Go. Пока существуют обе реализации, изменения протоколов, CLI и
-JSON вносятся в обе либо фиксируются как расхождение в `docs/architecture.md`.
+application, engine и оба протокола; выпуск и Android-приложение собираются из
+C++ версии (Android — Qt for Android). Пока существуют обе реализации,
+изменения протоколов, CLI и JSON вносятся в обе либо фиксируются как
+расхождение в `docs/architecture.md`.
 
 - `src/puls/core`: `Context`/`CancelScope`, `Error`/`Result`, прерывания
   (Ctrl+C, SIGTERM), JSON, IP, text;

@@ -15,7 +15,7 @@ GUI ─┘                └ measure
   вложенные модули реализуют first-party протоколы сервисов.
 - `measure` отвечает за workers, reconnect, deadline и подтверждённые байты.
 - `scripts/release.py` упаковывает архивы выпуска и собирает manifest и
-  checksums; APK пока собирается из Go-версии.
+  checksums; APK собирается из той же C++ версии с Qt for Android.
 
 Измерение выполняется последовательно: `select → ping → download → upload`.
 Ошибка отдельного сервиса не останавливает `all`. GUI получает immutable
@@ -33,9 +33,8 @@ GUI сохраняет тему, сервис, профиль, длительн�
 ## Переход на C++
 
 Проект переносится с Go на C++20 с CMake и vcpkg. C++ версия уже содержит
-CLI, GUI на Qt Quick, application runner, engine и оба протокола; сборка
-Android-приложения и release builder пока остаются в Go и переносятся
-следующими этапами.
+CLI, GUI на Qt Quick, application runner, engine, оба протокола, сборку
+выпуска и Android-приложения; Go-версия удаляется следующим этапом.
 
 | Слой | C++ | Go |
 | --- | --- | --- |
@@ -49,7 +48,7 @@ Android-приложения и release builder пока остаются в Go 
 | HTTP, WebSocket, TLS | `src/puls/net` | стандартная библиотека Go |
 | Context, ошибки, JSON, IP | `src/puls/core` | стандартная библиотека Go |
 | GUI | `src/puls/gui` | `internal/gui` |
-| Сборка Android | — | Fyne |
+| Сборка Android | Qt for Android, `cmake/android-toolchain.cmake` | — |
 | Сборка выпуска | `scripts/release.py`, CMake install | — |
 
 Пока обе реализации существуют, изменения протоколов, CLI и JSON вносятся в
@@ -66,8 +65,11 @@ Android-приложения и release builder пока остаются в Go 
   OpenSSL. Каждая сессия владеет собственным `io_context`; отмена закрывает
   сокет, DNS не блокирует отмену, соединение использует Happy Eyeballs.
 - TLS 1.2+ проверяет цепочку, имя хоста или IP и использует системное
-  хранилище: bundle Linux/BSD/Android, anchors и trust settings macOS,
-  хранилища `ROOT`/`CA` Windows.
+  хранилище: bundle Linux/BSD, anchors и trust settings macOS, хранилища
+  `ROOT`/`CA` Windows и все сертификаты обновляемого хранилища Android 14+
+  (`/apex/com.android.conscrypt/cacerts`) или системного
+  (`/system/etc/security/cacerts`): их имена посчитаны хешем OpenSSL 0.9.8,
+  который не находит поиск по хешу в OpenSSL 3.
 - `measure::run` запускает поток на worker и сохраняет инварианты engine.
 - GUI построен на Qt 6 Quick (QML, стиль Material). Состояние, тексты и
   правила dashboard находятся в Qt-независимой `gui::Dashboard` и

@@ -27,7 +27,6 @@ jobs:
     timeout-minutes: 10
     outputs:
       version: ${{ steps.version.outputs.value }}
-      build: ${{ steps.version.outputs.build }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -54,131 +53,27 @@ jobs:
             echo "Версия preflight должна иметь вид 1.2.3" >&2
             exit 1
           fi
-          IFS=. read -r major minor patch <<< "$version"
           echo "value=$version" >> "$GITHUB_OUTPUT"
-          echo "build=$((major * 1000000 + minor * 1000 + patch))" >> "$GITHUB_OUTPUT"
 
-  # Builds, tests and packages the six desktop targets exactly as CI does.
-  desktop:
-    name: Desktop
+  # Builds, tests and packages the six desktop targets and the signed APK
+  # exactly as CI does.
+  build:
+    name: Build
     needs: validate
     uses: ./.github/workflows/cpp.yml
     permissions:
       contents: read
     with:
       version: ${{ needs.validate.outputs.version }}
-
-  android:
-    name: Signed Android APK
-    needs: validate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Install bundletool
-        env:
-          BUNDLETOOL_VERSION: 1.18.3
-          BUNDLETOOL_SHA256: a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29
-        run: |
-          bundletool_jar="$RUNNER_TEMP/bundletool-all-${BUNDLETOOL_VERSION}.jar"
-          bundletool_bin="$RUNNER_TEMP/bundletool-bin"
-          curl --fail-with-body --location --silent --show-error \
-            --output "$bundletool_jar" \
-            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
-          printf '%s  %s\n' "$BUNDLETOOL_SHA256" "$bundletool_jar" | sha256sum --check --strict
-          mkdir -p "$bundletool_bin"
-          printf '#!/usr/bin/env bash\nexec java -jar "%s" "$@"\n' "$bundletool_jar" > "$bundletool_bin/bundletool"
-          chmod 0755 "$bundletool_bin/bundletool"
-          "$bundletool_bin/bundletool" version
-          echo "$bundletool_bin" >> "$GITHUB_PATH"
-      - name: Restore signing key
-        env:
-          KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          test -n "$KEYSTORE_BASE64"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/puls-release.keystore"
-      - name: Build signed Android bundle and universal APK
-        working-directory: cmd/puls
-        env:
-          KEYSTORE_PASS: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.PULS_ANDROID_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.PULS_ANDROID_KEY_PASSWORD }}
-          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-          RELEASE_BUILD: ${{ needs.validate.outputs.build }}
-          GOFLAGS: -ldflags=-X=main.version=${{ needs.validate.outputs.version }}
-        run: |
-          test -n "$KEYSTORE_PASS" && test -n "$KEY_ALIAS" && test -n "$KEY_PASS"
-          go run fyne.io/tools/cmd/fyne@v1.7.2 release \
-            --target android --app-version "$RELEASE_VERSION" --app-build "$RELEASE_BUILD" \
-            --tags migrated_fynedo \
-            --keystore "$RUNNER_TEMP/puls-release.keystore" --keystore-pass "$KEYSTORE_PASS" \
-            --key-name "$KEY_ALIAS" --key-pass "$KEY_PASS"
-
-          mapfile -d '' -t bundle_files < <(find . -maxdepth 1 -type f -name '*.aab' -print0)
-          if [[ "${#bundle_files[@]}" -ne 1 ]]; then
-            echo "Ожидался один Android App Bundle, найдено: ${#bundle_files[@]}" >&2
-            exit 1
-          fi
-
-          store_pass_file="$RUNNER_TEMP/puls-keystore.pass"
-          key_pass_file="$RUNNER_TEMP/puls-key.pass"
-          printf '%s\n' "$KEYSTORE_PASS" > "$store_pass_file"
-          printf '%s\n' "$KEY_PASS" > "$key_pass_file"
-          chmod 0600 "$store_pass_file" "$key_pass_file"
-          trap 'rm -f "$store_pass_file" "$key_pass_file"' EXIT
-
-          apk_set="$RUNNER_TEMP/puls.apks"
-          apk_dir="$RUNNER_TEMP/puls-universal-apk"
-          bundletool build-apks \
-            --bundle="${bundle_files[0]}" --output="$apk_set" --mode=universal --overwrite \
-            --ks="$RUNNER_TEMP/puls-release.keystore" --ks-key-alias="$KEY_ALIAS" \
-            --ks-pass="file:$store_pass_file" --key-pass="file:$key_pass_file"
-          mkdir -p "$apk_dir" ../../dist
-          unzip -j "$apk_set" universal.apk -d "$apk_dir"
-          install -m 0644 "$apk_dir/universal.apk" "../../dist/Puls_${RELEASE_VERSION}_android.apk"
-      - name: Verify signature and permissions
-        env:
-          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
-        run: |
-          apk="dist/Puls_${RELEASE_VERSION}_android.apk"
-          if [[ ! -f "$apk" ]]; then
-            echo "Не найден universal APK: $apk" >&2
-            exit 1
-          fi
-          build_tools_dir=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -print | sort -V | tail -1)
-          apksigner="$build_tools_dir/apksigner"
-          aapt2="$build_tools_dir/aapt2"
-          for tool in "$apksigner" "$aapt2"; do
-            if [[ ! -x "$tool" ]]; then
-              echo "Не найден Android verifier: $tool" >&2
-              exit 1
-            fi
-          done
-          "$apksigner" verify --verbose --print-certs "$apk"
-          permissions=$("$aapt2" dump permissions "$apk")
-          printf '%s\n' "$permissions"
-          grep -Fq 'android.permission.INTERNET' <<< "$permissions"
-          if grep -Eq 'ACCESS_(FINE|COARSE)_LOCATION|READ_PHONE_STATE|READ_CONTACTS|RECORD_AUDIO|CAMERA' <<< "$permissions"; then
-            echo "APK запрашивает лишние чувствительные разрешения" >&2
-            exit 1
-          fi
-      - name: Upload APK
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: android-apk
-          path: dist/*.apk
-          if-no-files-found: error
-          retention-days: 3
+    secrets:
+      PULS_ANDROID_KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}
+      PULS_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}
+      PULS_ANDROID_KEY_ALIAS: ${{ secrets.PULS_ANDROID_KEY_ALIAS }}
+      PULS_ANDROID_KEY_PASSWORD: ${{ secrets.PULS_ANDROID_KEY_PASSWORD }}
 
   publish:
     name: Publish GitHub Release
-    needs: [validate, desktop, android]
+    needs: [validate, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

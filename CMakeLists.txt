@@ -6,6 +6,7 @@ option(PULS_LIVE_TESTS "Build tests that contact the real measurement services" 
 option(PULS_SYSTEM_TLS_TESTS "Build a smoke test for the platform certificate store" OFF)
 option(PULS_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(PULS_PORTABLE_INSTALL "Install the self-contained layout of the release archives" OFF)
+option(PULS_QT_FROM_VCPKG "Build Qt with vcpkg; off when Qt comes from Qt for Android" ON)
 set(PULS_SANITIZERS "" CACHE STRING "Semicolon-separated sanitizers: address, undefined, thread")
 set(PULS_VERSION "dev" CACHE STRING "Version reported by `puls version`")
 
@@ -17,7 +18,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING "Minimum macOS version")
 if(PULS_BUILD_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES "tests")
 endif()
-if(PULS_BUILD_GUI)
+if(PULS_BUILD_GUI AND PULS_QT_FROM_VCPKG)
     list(APPEND VCPKG_MANIFEST_FEATURES "gui")
 endif()
 
