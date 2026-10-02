@@ -65,7 +65,7 @@ class IconsTest(unittest.TestCase):
             self.assertIn(f'    readonly property string {name}: "M0 0h1"\n', qml)
 
     def test_committed_icons_match_the_list(self):
-        qml = (gui_assets.QML_DIR / "Icons.qml").read_text()
+        qml = (gui_assets.QML_DIR / "Icons.qml").read_text(encoding="utf-8")
         names = re.findall(r"readonly property string (\w+):", qml)
         self.assertEqual(names, list(gui_assets.ICONS))
         self.assertIn(f"Lucide {gui_assets.LUCIDE_VERSION}", qml)
@@ -73,7 +73,7 @@ class IconsTest(unittest.TestCase):
     def test_used_icons_exist(self):
         used = set()
         for path in gui_assets.QML_DIR.glob("*.qml"):
-            used.update(re.findall(r"\bIcons\.(\w+)", path.read_text()))
+            used.update(re.findall(r"\bIcons\.(\w+)", path.read_text(encoding="utf-8")))
         self.assertTrue(used)
         self.assertLessEqual(used, set(gui_assets.ICONS))
 
@@ -100,8 +100,10 @@ class IconsTest(unittest.TestCase):
                 gui_assets, "QML_DIR", output
             ):
                 gui_assets.generate_icons(archive)
-            self.assertIn("readonly property string settings", (output / "Icons.qml").read_text())
-            self.assertEqual((output / "LICENSE.lucide.txt").read_text(), "ISC License\n")
+            icons = (output / "Icons.qml").read_text(encoding="utf-8")
+            self.assertIn("readonly property string settings", icons)
+            license_text = (output / "LICENSE.lucide.txt").read_text(encoding="utf-8")
+            self.assertEqual(license_text, "ISC License\n")
 
 
 class FontsTest(unittest.TestCase):
@@ -109,10 +111,11 @@ class FontsTest(unittest.TestCase):
         fonts = gui_assets.QML_DIR / "fonts"
         for name in gui_assets.FONTS:
             self.assertGreater((fonts / name).stat().st_size, 10_000, name)
-        self.assertIn("SIL OPEN FONT LICENSE", (fonts / "LICENSE.txt").read_text())
+        license_text = (fonts / "LICENSE.txt").read_text(encoding="utf-8")
+        self.assertIn("SIL OPEN FONT LICENSE", license_text)
 
     def test_fonts_are_resources_of_the_module(self):
-        cmake = (gui_assets.QML_DIR / "CMakeLists.txt").read_text()
+        cmake = (gui_assets.QML_DIR / "CMakeLists.txt").read_text(encoding="utf-8")
         for name in gui_assets.FONTS:
             self.assertIn(f"fonts/{name}", cmake)
 

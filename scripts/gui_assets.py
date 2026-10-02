@@ -177,8 +177,9 @@ def generate_icons(archive: Path) -> None:
     with tarfile.open(fileobj=io.BytesIO(data)) as package:
         nodes = json.load(package.extractfile("package/icon-nodes.json"))
         license_text = package.extractfile("package/LICENSE").read().decode()
-    (QML_DIR / "Icons.qml").write_text(icons_qml(nodes, LUCIDE_VERSION))
-    (QML_DIR / "LICENSE.lucide.txt").write_text(license_text)
+    icons = icons_qml(nodes, LUCIDE_VERSION)
+    (QML_DIR / "Icons.qml").write_text(icons, encoding="utf-8", newline="\n")
+    (QML_DIR / "LICENSE.lucide.txt").write_text(license_text, encoding="utf-8", newline="\n")
 
 
 def rename(font, family: str, style: str) -> None:
