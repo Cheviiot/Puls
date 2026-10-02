@@ -261,9 +261,9 @@ void screenshot(QQuickWindow& window, const QString& name) {
 struct View {
     explicit View(DashboardController& controller, const QString& os = QStringLiteral("linux")) {
         QObject::connect(&engine, &QQmlApplicationEngine::warnings,
-                         [this](const QList<QQmlError>& errors) {
-                             for (const QQmlError& error : errors) {
-                                 warnings.append(error.toString());
+                         [this](const QList<QQmlError>& messages) {
+                             for (const QQmlError& message : messages) {
+                                 warnings.append(message.toString());
                              }
                          });
         QVariantMap properties{{QStringLiteral("dashboard"), QVariant::fromValue(&controller)}};
