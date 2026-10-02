@@ -44,14 +44,16 @@ Visual Studio. Пути исходников, которые Qt генериру
 MAX_PATH, если каталог vcpkg расположен глубоко; укажите короткий каталог
 сборки зависимостей: `-DVCPKG_INSTALL_OPTIONS=--x-buildtrees-root=C:/vb`.
 
-Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3, Qt 6.4+ и
-GoogleTest через preset `system-debug`:
+Вместо vcpkg можно взять системные Boost 1.83+, OpenSSL 3, Qt 6.9+ и
+GoogleTest через preset `system-debug`, например в Ubuntu 26.04. Со старым Qt
+собирается только CLI: `-DPULS_BUILD_GUI=OFF`.
 
 ```bash
 sudo apt-get install cmake ninja-build g++ libboost-dev libboost-json-dev libssl-dev \
-  libgtest-dev qt6-base-dev qt6-declarative-dev qml6-module-qtquick \
-  qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-window \
-  qml6-module-qtquick-templates qml6-module-qtqml-workerscript qt6-qpa-plugins
+  libgtest-dev qt6-base-dev qt6-declarative-dev qt6-declarative-dev-tools \
+  qt6-qpa-plugins qml6-module-qtqml qml6-module-qtqml-workerscript qml6-module-qtquick \
+  qml6-module-qtquick-layouts qml6-module-qtquick-shapes qml6-module-qtquick-templates \
+  qml6-module-qtquick-window
 cmake --preset system-debug
 cmake --build --preset system-debug
 ctest --preset system-debug
