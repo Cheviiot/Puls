@@ -1,0 +1,55 @@
+name: Remove co-author trailers
+
+# One-off, approved by the repository owner: removes the Co-Authored-By
+# trailers that list Claude among the contributors from the commits of main
+# after BASE. The rewritten commits keep their trees, authors and author
+# dates, and main moves only from the commit read at the start.
+on:
+  push:
+    branches: [claude/cpp-project-refactor-cmake-3kgph0]
+    paths: [.github/workflows/remove-co-author-trailers.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    name: Rewrite the messages of main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Remove the Claude co-author trailers
+        env:
+          # The last commit of main without the trailer.
+          BASE: 101299c92f16803e183c8dc802ed829b1643bddd
+        run: |
+          head=$(git rev-parse HEAD)
+          git merge-base --is-ancestor "$BASE" "$head"
+          if [[ -n "$(git rev-list --merges "$BASE..$head")" ]]; then
+            echo "В истории main после $BASE есть merge-коммиты" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          parent=$BASE
+          for commit in $(git rev-list --reverse "$BASE..$head"); do
+            parent=$(git log -1 --pretty=format:%B "$commit" \
+              | grep -v -i -E '^Co-Authored-By: Claude' \
+              | GIT_AUTHOR_NAME="$(git log -1 --format=%an "$commit")" \
+                GIT_AUTHOR_EMAIL="$(git log -1 --format=%ae "$commit")" \
+                GIT_AUTHOR_DATE="$(git log -1 --format=%aI "$commit")" \
+                git commit-tree "$commit^{tree}" -p "$parent")
+          done
+          # The code stays the same and no trailer is left.
+          test "$(git rev-parse "$parent^{tree}")" = "$(git rev-parse "$head^{tree}")"
+          if git log --format=%B "$BASE..$parent" | grep -i -q 'Co-Authored-By: Claude'; then
+            echo "Строка Co-Authored-By осталась" >&2
+            exit 1
+          fi
+          git log --format='%h %an | %cn | %s' "$BASE..$parent"
+          git push --force-with-lease="main:$head" origin "$parent:refs/heads/main"
