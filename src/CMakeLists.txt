@@ -112,6 +112,10 @@ if(NOT ANDROID)
 endif()
 
 if(PULS_BUILD_GUI)
+    # The QML module "Puls" with the views of the dashboard. Its build
+    # directory must not be named "puls" like the executable.
+    add_subdirectory(puls/gui/qml gui_qml)
+
     # Qt Quick dashboard over the dashboard model.
     add_library(puls_gui STATIC
         puls/gui/controller.cpp
@@ -120,19 +124,14 @@ if(PULS_BUILD_GUI)
     add_library(Puls::gui ALIAS puls_gui)
     set_target_properties(puls_gui PROPERTIES AUTOMOC ON)
     target_link_libraries(puls_gui PUBLIC
-        Puls::gui_model Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+        Puls::gui_model puls_gui_qml Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick)
     if(PULS_QT_STATIC)
         target_compile_definitions(puls_gui PRIVATE PULS_QT_STATIC)
     endif()
     qt_add_resources(puls_gui "puls_gui_resources"
         PREFIX "/puls"
         BASE puls/gui
-        FILES
-            puls/gui/assets/Icon.png
-            puls/gui/qml/InfoCard.qml
-            puls/gui/qml/Main.qml
-            puls/gui/qml/MetricCard.qml
-            puls/gui/qml/SettingsDialog.qml)
+        FILES puls/gui/assets/Icon.png)
     puls_configure_target(puls_gui)
 
     # The graphical application; `puls gui` starts it.

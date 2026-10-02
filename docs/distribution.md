@@ -3,18 +3,22 @@
 ## Среда разработки на ALT
 
 Системные зависимости устанавливаются не на host, а в Distrobox. Контейнер
-`puls-dev` собирает C++ версию с библиотеками Ubuntu 24.04 через preset
-`system-debug`:
+`puls-dev` собирает C++ версию с библиотеками Ubuntu 26.04 через preset
+`system-debug`. Графическому интерфейсу нужен Qt 6.9 или новее, а в Ubuntu
+26.04 — Qt 6.10. clang-format 18 в ней нет, поэтому он ставится из PyPI:
 
 ```sh
-distrobox create --name puls-dev --image docker.io/library/ubuntu:24.04 --yes
+distrobox create --name puls-dev --image docker.io/library/ubuntu:26.04 --yes
 distrobox enter puls-dev -- sudo apt-get update
 distrobox enter puls-dev -- sudo apt-get install -y \
-  cmake ninja-build g++ git python3 shellcheck clang-format-18 \
+  cmake ninja-build g++ git python3 pipx shellcheck \
   libboost-dev libboost-json-dev libssl-dev libgtest-dev \
-  qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-controls \
-  qml6-module-qtquick-layouts qml6-module-qtquick-window qml6-module-qtquick-templates \
-  qml6-module-qtqml-workerscript qt6-qpa-plugins
+  qt6-base-dev qt6-declarative-dev qt6-declarative-dev-tools qt6-qpa-plugins \
+  qml6-module-qtqml qml6-module-qtqml-workerscript qml6-module-qtquick \
+  qml6-module-qtquick-layouts qml6-module-qtquick-shapes \
+  qml6-module-qtquick-templates qml6-module-qtquick-window
+distrobox enter puls-dev -- bash -lc 'pipx install clang-format==18.1.8 &&
+  ln -sf ~/.local/bin/clang-format ~/.local/bin/clang-format-18'
 ```
 
 Сборка и проверка:
@@ -22,6 +26,7 @@ distrobox enter puls-dev -- sudo apt-get install -y \
 ```sh
 distrobox enter puls-dev -- bash -lc 'cd "$PWD" &&
   cmake --preset system-debug && cmake --build --preset system-debug &&
+  cmake --build --preset system-debug --target all_qmllint &&
   QT_QPA_PLATFORM=offscreen ctest --preset system-debug &&
   python3 -m unittest discover -s scripts/tests'
 ```

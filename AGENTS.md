@@ -71,7 +71,8 @@ Android.
   (`app::Runner`);
 - `src/puls/gui`: `model` — состояние и поведение dashboard без Qt;
   `controller`, `run` и `qml/` — тонкий слой Qt Quick над моделью, тема,
-  lifecycle и безопасные preferences; `main.cpp` — программа `puls-gui`;
+  lifecycle и безопасные preferences; `qml/` — модуль QML `Puls` со своими
+  компонентами, шрифтами и значками; `main.cpp` — программа `puls-gui`;
 - `src/puls/measure`: общий concurrency engine;
 - `src/puls/service`: `Backend`, `ConnectionInfoBackend`, общие types/helpers;
 - `src/puls/service/yandex`: только протокол Яндекса;
@@ -84,8 +85,8 @@ Android.
 - `cmake`: общие опции, упаковка, overlay triplets и ports vcpkg, toolchain
   Android;
 - `scripts`: direct installers; `scripts/release.py` — архивы выпуска,
-  manifest и checksums; `scripts/tests` — тесты инструмента выпуска и
-  установщиков;
+  manifest и checksums; `scripts/gui_assets.py` — шрифты и значки GUI;
+  `scripts/tests` — тесты этих инструментов и установщиков;
 - `docs`: архитектура и выпуск.
 
 Передавай logger и внешние зависимости через constructors/options. Не добавляй
@@ -196,11 +197,22 @@ golden tests.
 
 ## GUI
 
-- Qt 6 Quick/QML со стилем Material. Логику и тексты держи в
-  `puls::gui::Dashboard`, QML только отображает свойства и вызывает методы
-  `DashboardController`. События runner приходят из рабочего потока и
-  передаются в UI-поток только queued-вызовом; Qt-типы между потоками не
-  передаются.
+- Qt Quick/QML, Qt ≥ 6.9, без стилей Qt Quick Controls: компоненты модуля
+  `Puls` построены на `QtQuick.Templates`, цвета и размеры берутся из
+  singleton `Theme`, текст — шрифтом Inter, значки — контурами Lucide через
+  `Shape`. Шрифты и `Icons.qml` генерирует только `scripts/gui_assets.py`;
+  их лицензии попадают в `THIRD_PARTY_NOTICES.txt`. Не добавляй шейдеры и
+  эффекты: Linux рисует программным рендерером.
+- Окно рисует свою строку заголовка одинаково во всех ОС. На Windows и macOS
+  системные кнопки окна остаются в ней (`Qt::ExpandedClientAreaHint`), на
+  Linux окно без рамки с собственными кнопками и перемещением и изменением
+  размера через `startSystemMove`/`startSystemResize`, на Android интерфейс
+  занимает экран с отступами `SafeArea`. Системные части окна следуют теме
+  dashboard через `follow_system_theme`.
+- Логику и тексты держи в `puls::gui::Dashboard`, QML только отображает
+  свойства и вызывает методы `DashboardController`. События runner приходят
+  из рабочего потока и передаются в UI-поток только queued-вызовом; Qt-типы
+  между потоками не передаются.
 - CLI и GUI обязаны вызывать `app::Runner`; не дублируй orchestration, retry
   или преобразование результатов во frontend.
 - Сохраняй только тему, сервис, профиль, duration, connections, phase и размер
@@ -231,6 +243,7 @@ tokens, production API responses или captures с персональными �
 
 ```sh
 cmake --preset debug && cmake --build --preset debug
+cmake --build --preset debug --target all_qmllint
 ctest --preset debug --repeat until-fail:10
 cmake --preset sanitize && cmake --build --preset sanitize && ctest --preset sanitize
 cmake --preset tsan && cmake --build --preset tsan && ctest --preset tsan
@@ -241,10 +254,13 @@ shellcheck scripts/install.sh .github/scripts/*.sh
 ```
 
 Без vcpkg используй preset `system-debug` с системными Boost ≥ 1.83,
-OpenSSL ≥ 3.0, Qt ≥ 6.4 и GTest; санитайзеры включает `-DPULS_SANITIZERS=...`,
+OpenSSL ≥ 3.0, Qt ≥ 6.9 и GTest; санитайзеры включает `-DPULS_SANITIZERS=...`,
 сборку без Qt — `-DPULS_BUILD_GUI=OFF`. GUI-тесты работают с
 `QT_QPA_PLATFORM=offscreen`; `PULS_GUI_SCREENSHOTS=<dir>` сохраняет снимки
-экрана для проверки вёрстки. Live tests собираются с `-DPULS_LIVE_TESTS=ON`.
+экрана для проверки вёрстки, а `PULS_GUI_NATIVE_SCREENSHOTS=<dir>` с
+платформой системы снимает окно вместе с её кнопками (CI выкладывает снимки
+в artifacts `gui-screenshots-*`).
+Live tests собираются с `-DPULS_LIVE_TESTS=ON`.
 Workflow `cpp.yml` обязан проходить для шести desktop targets (Linux, macOS
 и Windows на x64 и ARM64; Windows ARM64 — только CLI), Android, Linux Clang,
 ASan+UBSan и TSan. Зависимости из vcpkg, включая Qt, линкуются статически,

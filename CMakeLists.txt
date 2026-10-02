@@ -51,7 +51,14 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL 3.0 REQUIRED)
 find_package(Boost 1.83 CONFIG REQUIRED COMPONENTS json)
 if(PULS_BUILD_GUI)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+    # The window shares its title bar with the system through
+    # Qt::ExpandedClientAreaHint and the QML SafeArea of Qt 6.9.
+    find_package(Qt6 6.9 COMPONENTS Core Gui Qml Quick)
+    if(NOT Qt6_FOUND)
+        message(FATAL_ERROR "The graphical interface needs Qt 6.9 or newer with Qt Quick "
+            "(considered: ${Qt6_CONSIDERED_VERSIONS}). Configure with -DPULS_BUILD_GUI=OFF "
+            "to build only the command-line program.")
+    endif()
     # A static Qt needs its plugins linked into each executable.
     get_target_property(puls_qt_core_type Qt6::Core TYPE)
     if(puls_qt_core_type STREQUAL "STATIC_LIBRARY")
