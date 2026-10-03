@@ -12,6 +12,7 @@
 #include <QPixmap>
 #include <QQmlApplicationEngine>
 #include <QQmlError>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QSettings>
@@ -369,6 +370,60 @@ TEST(GuiQml, SettingsPanelSavesAndReportsErrors) {
     controller->cancel();
     ASSERT_TRUE(wait_until([&] { return !controller->busy(); }));
     EXPECT_TRUE(view.warnings.isEmpty()) << view.errors();
+}
+
+// Waits until the settings panel has opened and stopped moving.
+void open_settings(const View& view, QObject* panel) {
+    QMetaObject::invokeMethod(view.window, "openSettings");
+    ASSERT_TRUE(wait_until([&] { return panel->property("opened").toBool(); }));
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 500) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+}
+
+QRectF scene_rect(const View& view, const char* name) {
+    auto* item = qobject_cast<QQuickItem*>(view.find(name));
+    return item != nullptr ? item->mapRectToScene(QRectF(0, 0, item->width(), item->height()))
+                           : QRectF();
+}
+
+TEST(GuiQml, SettingsPanelKeepsClearOfSystemBars) {
+    Fixture fixture;
+    auto controller = fixture.controller();
+    {
+        // A phone in landscape with the navigation bar at the right edge.
+        View view(*controller, QStringLiteral("android"));
+        ASSERT_NE(view.window, nullptr) << view.errors();
+        view.window->resize(900, 412);
+        QObject* panel = view.find("settingsPanel");
+        ASSERT_NE(panel, nullptr);
+        panel->setProperty("rightInset", 48);
+        open_settings(view, panel);
+        const QRectF save = scene_rect(view, "saveButton");
+        ASSERT_FALSE(save.isEmpty());
+        EXPECT_LE(save.right(), 900 - 48);
+        EXPECT_LE(scene_rect(view, "settingsCloseButton").right(), 900 - 48);
+        screenshot(*view.window, QStringLiteral("settings-landscape"));
+        EXPECT_TRUE(view.warnings.isEmpty()) << view.errors();
+    }
+    {
+        // A narrow window with a cutout at the left edge.
+        View view(*controller, QStringLiteral("android"));
+        ASSERT_NE(view.window, nullptr) << view.errors();
+        view.window->resize(412, 860);
+        QObject* panel = view.find("settingsPanel");
+        ASSERT_NE(panel, nullptr);
+        panel->setProperty("leftInset", 32);
+        open_settings(view, panel);
+        EXPECT_TRUE(panel->property("fullWidth").toBool());
+        const QRectF profiles = scene_rect(view, "profileChoice");
+        ASSERT_FALSE(profiles.isEmpty());
+        EXPECT_GE(profiles.left(), 32);
+        EXPECT_GE(scene_rect(view, "saveButton").left(), 32);
+        EXPECT_TRUE(view.warnings.isEmpty()) << view.errors();
+    }
 }
 
 TEST(GuiQml, ShowsErrorsAsToast) {

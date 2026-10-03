@@ -10,6 +10,9 @@ Item {
     required property var dashboard
     // Takes the whole width on narrow windows.
     property bool fullWidth: false
+    // The parts of the window edges under system bars and display cutouts.
+    property real leftInset: 0
+    property real rightInset: 0
     property real bottomInset: 0
     readonly property bool opened: state === "open"
 
@@ -71,7 +74,8 @@ Item {
     FocusScope {
         id: sheet
 
-        width: panel.fullWidth ? panel.width : Math.min(420, panel.width - 40)
+        width: panel.fullWidth ? panel.width
+                               : Math.min(420 + panel.rightInset, panel.width - 40)
         height: panel.height
         x: panel.opened ? panel.width - width : panel.width
 
@@ -100,8 +104,11 @@ Item {
             color: Theme.border
         }
 
+        // The background reaches the edges, the controls stay clear of them.
         ColumnLayout {
             anchors.fill: parent
+            anchors.leftMargin: panel.fullWidth ? panel.leftInset : 0
+            anchors.rightMargin: panel.rightInset
             anchors.bottomMargin: panel.bottomInset
             spacing: 0
 

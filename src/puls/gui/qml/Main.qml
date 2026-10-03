@@ -278,6 +278,8 @@ Window {
             anchors.left: parent.left
             anchors.right: parent.right
             fullWidth: root.width < 560
+            leftInset: root.SafeArea.margins.left
+            rightInset: root.SafeArea.margins.right
             bottomInset: root.SafeArea.margins.bottom
             dashboard: window.dashboard
         }
