@@ -1,8 +1,9 @@
 # Collects the license files of the vcpkg ports into one notices file.
 # Ports with the same license text share a section; build tools are skipped.
+# GUI_ASSETS_DIR adds the fonts and icons of the graphical interface.
 #
 # cmake -DPACKAGES_DIR=<vcpkg_installed>/<triplet> -DVCPKG_BASELINE=<commit>
-#       -DOUTPUT=<file> -P PulsNotices.cmake
+#       -DOUTPUT=<file> [-DGUI_ASSETS_DIR=<src/puls/gui/qml>] -P PulsNotices.cmake
 
 foreach(variable IN ITEMS PACKAGES_DIR VCPKG_BASELINE OUTPUT)
     if(NOT DEFINED ${variable})
@@ -52,4 +53,18 @@ foreach(hash IN LISTS hashes)
         "================================================================\n\n"
         "${license}\n")
 endforeach()
+
+if(DEFINED GUI_ASSETS_DIR)
+    string(APPEND text "\nThe graphical interface also includes a subset of the Inter typeface\n"
+        "(https://rsms.me/inter/) and icons of Lucide (https://lucide.dev/).\n")
+    foreach(asset IN ITEMS "Inter 4.1;fonts/LICENSE.txt" "Lucide 1.50.0;LICENSE.lucide.txt")
+        list(GET asset 0 name)
+        list(GET asset 1 license_file)
+        file(READ "${GUI_ASSETS_DIR}/${license_file}" license)
+        string(APPEND text "\n================================================================\n"
+            "${name}\n"
+            "================================================================\n\n"
+            "${license}\n")
+    endforeach()
+endif()
 file(WRITE "${OUTPUT}" "${text}")

@@ -5,13 +5,9 @@
 
 #include <QGuiApplication>
 #include <QIcon>
-#include <QPalette>
 #include <QQmlApplicationEngine>
-#include <QQuickStyle>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
-#include <QStyleHints>
-#include <QUrl>
 #include <QVariant>
 
 #include <cstdlib>
@@ -51,14 +47,6 @@ Error check_display([[maybe_unused]] const service::LogFunc& log) {
     return {};
 }
 
-bool system_dark() {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
-#else
-    return QGuiApplication::palette().color(QPalette::Window).lightness() < 128;
-#endif
-}
-
 } // namespace
 
 Error run(const Context& ctx, const Options& options) {
@@ -87,20 +75,13 @@ Error run(const Context& ctx, const Options& options) {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     }
 #endif
-    QQuickStyle::setStyle(QStringLiteral("Material"));
 
     SettingsStore store;
     app::RunnerOptions runner;
     runner.log = options.log;
     DashboardController controller(ctx, QString::fromStdString(options.version), std::move(runner),
                                    store);
-    controller.setSystemDark(system_dark());
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-    QObject::connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, &controller,
-                     [&controller](Qt::ColorScheme scheme) {
-                         controller.setSystemDark(scheme == Qt::ColorScheme::Dark);
-                     });
-#endif
+    follow_system_theme(controller);
 #if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
     // A measurement does not continue in the background.
     QObject::connect(&application, &QGuiApplication::applicationStateChanged, &controller,
@@ -113,7 +94,7 @@ Error run(const Context& ctx, const Options& options) {
 
     QQmlApplicationEngine engine;
     engine.setInitialProperties({{QStringLiteral("dashboard"), QVariant::fromValue(&controller)}});
-    engine.load(QUrl(QStringLiteral("qrc:/puls/qml/Main.qml")));
+    engine.loadFromModule("Puls", "Main");
     if (engine.rootObjects().isEmpty()) {
         return Error::make("не удалось загрузить графический интерфейс");
     }

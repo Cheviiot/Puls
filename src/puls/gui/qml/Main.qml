@@ -1,55 +1,60 @@
 import QtQuick
-import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Templates as T
 
-// One mobile-first dashboard: service, current value, four metrics, server,
-// connection, notices and per-service results.
-ApplicationWindow {
+// One dashboard for phones and desktops. The window draws its own title bar:
+// on Windows and macOS the system keeps its window buttons in it, elsewhere
+// the bar has its own.
+Window {
     id: window
 
     required property var dashboard
+    // The platform; the tests show the window of every platform.
+    property string os: Qt.platform.os
 
-    readonly property bool mobile: Qt.platform.os === "android" || Qt.platform.os === "ios"
+    readonly property bool mobile: os === "android" || os === "ios"
+    readonly property bool systemButtons: os === "windows" || os === "osx"
+    readonly property bool ownFrame: !mobile && !systemButtons
+    readonly property bool wide: width >= 760
     readonly property bool dark: dashboard.themeIndex === 2
                                  || (dashboard.themeIndex === 0 && dashboard.systemDark)
-    readonly property color accentColor: dark ? "#22d3ee" : "#0891b2"
-    readonly property color surfaceColor: dark ? "#0b1216" : "#f7fafb"
-    readonly property color headerColor: dark ? "#101a20" : "#eef5f7"
-    readonly property color secondaryColor: dark ? "#9aa8af" : "#5d6b72"
-    readonly property color dangerColor: dark ? "#f87171" : "#dc2626"
 
-    // Tones follow puls::gui::Tone: neutral, success, warning, danger.
-    function toneColor(tone) {
-        switch (tone) {
-        case 1:
-            return dark ? "#4ade80" : "#15803d"
-        case 2:
-            return dark ? "#fbbf24" : "#b45309"
-        case 3:
-            return dangerColor
-        default:
-            return secondaryColor
-        }
-    }
-
-    function showError(message) {
-        errorDialog.message = message
-        errorDialog.open()
+    function openSettings() {
+        if (!dashboard.busy)
+            settings.open()
     }
 
     width: dashboard.windowWidth
-    height: dashboard.windowHeight
-    minimumWidth: mobile ? 0 : 390
-    minimumHeight: mobile ? 0 : 640
+    // A stored or default height may not fit a small screen.
+    height: Math.min(dashboard.windowHeight,
+                     Math.max(minimumHeight, Screen.desktopAvailableHeight - 48))
+    minimumWidth: mobile ? 0 : dashboard.minimumWindowWidth
+    minimumHeight: mobile ? 0 : dashboard.minimumWindowHeight
     visible: true
-    title: "Puls"
-    color: surfaceColor
+    // macOS would draw the title over the bar.
+    title: os === "osx" ? "" : "Puls"
+    color: Theme.background
+    flags: {
+        // Phones show the interface under the system bars.
+        if (mobile)
+            return Qt.Window | Qt.ExpandedClientAreaHint
+        // The system keeps its window buttons, shadow and snapping; without
+        // the title hint Windows draws no title and icon of its own.
+        if (os === "windows")
+            return Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint
+                   | Qt.CustomizeWindowHint | Qt.WindowMinimizeButtonHint
+                   | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint
+        if (os === "osx")
+            return Qt.Window | Qt.ExpandedClientAreaHint | Qt.NoTitleBarBackgroundHint
+        // Elsewhere the window draws its whole frame.
+        return Qt.Window | Qt.FramelessWindowHint
+    }
 
-    Material.theme: dark ? Material.Dark : Material.Light
-    Material.accent: accentColor
-    Material.primary: accentColor
-    Material.background: surfaceColor
+    Binding {
+        target: Theme
+        property: "dark"
+        value: window.dark
+    }
 
     onClosing: {
         if (!mobile)
@@ -59,298 +64,248 @@ ApplicationWindow {
 
     Connections {
         target: window.dashboard
+
         function onErrorOccurred(message) {
-            window.showError(message)
+            toast.show(message)
         }
     }
 
-    header: ToolBar {
-        Material.background: window.headerColor
-        Material.foreground: window.dark ? "#e6eef1" : "#0f172a"
-        leftPadding: 16
-        rightPadding: 4
-        topPadding: 6
-        bottomPadding: 6
-
-        RowLayout {
-            width: parent.width
-
-            ColumnLayout {
-                spacing: 0
-                Label {
-                    text: "Puls"
-                    font.pixelSize: 24
-                    font.bold: true
-                }
-                Label {
-                    text: "v" + window.dashboard.version.replace(/^v/, "")
-                    color: window.secondaryColor
-                    font.pixelSize: 12
-                }
-            }
-            Item {
-                Layout.fillWidth: true
-            }
-            ToolButton {
-                text: "◐"
-                font.pixelSize: 20
-                ToolTip.visible: hovered
-                ToolTip.text: "Оформление: " + window.dashboard.themeLabel
-                Accessible.name: "Оформление"
-                onClicked: window.dashboard.cycleTheme()
-            }
-            ToolButton {
-                text: "⚙"
-                font.pixelSize: 20
-                enabled: !window.dashboard.busy
-                ToolTip.visible: hovered
-                ToolTip.text: "Настройки"
-                Accessible.name: "Настройки"
-                onClicked: settingsDialog.open()
-            }
-        }
-    }
-
-    ScrollView {
-        id: scroll
+    Item {
+        id: root
 
         anchors.fill: parent
-        contentWidth: availableWidth
-        clip: true
 
-        ColumnLayout {
-            width: scroll.availableWidth
-            spacing: 12
+        TitleBar {
+            id: titleBar
 
-            Item {
-                Layout.preferredHeight: 4
-            }
-            ComboBox {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                model: window.dashboard.serviceLabels
-                currentIndex: window.dashboard.serviceIndex
-                enabled: !window.dashboard.busy
-                onActivated: index => window.dashboard.selectService(index)
-            }
-            Label {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                horizontalAlignment: Text.AlignHCenter
-                wrapMode: Text.WordWrap
-                text: window.dashboard.settingsSummary
-                color: window.secondaryColor
-            }
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                implicitHeight: 1
-                color: window.dark ? "#1f2d35" : "#d9e4e8"
-            }
+            objectName: "titleBar"
+            y: window.mobile ? root.SafeArea.margins.top : 0
+            width: parent.width
+            height: window.mobile ? 56
+                  : window.systemButtons ? Math.max(root.SafeArea.margins.top,
+                                                    window.os === "osx" ? 28 : 32)
+                  : 40
+            window: window
+            dashboard: window.dashboard
+            os: window.os
+            mobile: window.mobile
+            leadingInset: window.os === "osx" ? 72 : root.SafeArea.margins.left
+            // The minimize, maximize and close buttons that Windows draws.
+            trailingInset: window.os === "windows" ? Math.round(height * 4.5)
+                                                   : root.SafeArea.margins.right
+            onSettingsRequested: window.openSettings()
+        }
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                spacing: 0
+        Flickable {
+            id: page
 
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.WordWrap
-                    text: window.dashboard.status
-                    color: window.toneColor(window.dashboard.statusTone)
-                }
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: window.dashboard.currentValue
-                    font.pixelSize: 52
-                    font.bold: true
-                }
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: window.dashboard.currentUnit
-                    color: window.secondaryColor
-                }
-                ProgressBar {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 8
-                    visible: window.dashboard.progressVisible
-                    value: window.dashboard.progress
-                    indeterminate: window.dashboard.busy && window.dashboard.progress <= 0
-                }
-            }
+            anchors.top: titleBar.bottom
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            contentWidth: width
+            contentHeight: layout.implicitHeight + layout.y + 24 + root.SafeArea.margins.bottom
+            boundsBehavior: Flickable.StopAtBounds
+            clip: true
+
+            T.ScrollBar.vertical: ThinScrollBar {}
 
             GridLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                columns: window.width >= 720 ? 4 : 2
-                columnSpacing: 8
-                rowSpacing: 8
+                id: layout
 
-                MetricCard {
-                    title: "Задержка"
-                    value: window.dashboard.ping
-                    unit: "мс"
-                }
-                MetricCard {
-                    title: "Джиттер"
-                    value: window.dashboard.jitter
-                    unit: "мс"
-                }
-                MetricCard {
-                    title: "Загрузка"
-                    value: window.dashboard.download
-                    unit: "Мбит/с"
-                }
-                MetricCard {
-                    title: "Отдача"
-                    value: window.dashboard.upload
-                    unit: "Мбит/с"
-                }
-            }
+                readonly property real margin: window.wide ? 24 : 16
 
-            InfoCard {
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                title: "Сервер измерения"
+                x: Math.max(margin + root.SafeArea.margins.left,
+                            (page.width - width) / 2)
+                y: window.wide ? 12 : 4
+                width: Math.min(page.width - 2 * margin - root.SafeArea.margins.left
+                                - root.SafeArea.margins.right,
+                                window.wide ? 1040 : 640)
+                columns: window.wide ? 2 : 1
+                columnSpacing: 16
+                rowSpacing: 12
 
-                Label {
+                HeroCard {
+                    objectName: "hero"
+                    Layout.preferredWidth: window.wide ? 372 : -1
+                    Layout.fillWidth: !window.wide
+                    Layout.rowSpan: window.wide ? 4 : 1
+                    Layout.alignment: Qt.AlignTop
+                    dashboard: window.dashboard
+                    onSettingsRequested: window.openSettings()
+                }
+
+                Banner {
+                    objectName: "notices"
                     Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    text: window.dashboard.serverText
+                    Layout.alignment: Qt.AlignTop
+                    visible: window.dashboard.notices.length > 0
+                    text: window.dashboard.notices
+                    tone: window.dashboard.noticeTone
                 }
-            }
 
-            InfoCard {
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                title: "Подключение"
-
-                Label {
+                GridLayout {
                     Layout.fillWidth: true
-                    wrapMode: Text.WordWrap
-                    text: window.dashboard.connectionText
+                    Layout.alignment: Qt.AlignTop
+                    columns: 2
+                    columnSpacing: 12
+                    rowSpacing: 12
+
+                    MetricTile {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        title: "Задержка"
+                        iconPath: Icons.ping
+                        value: window.dashboard.ping
+                        unit: "мс"
+                        active: window.dashboard.activeMetric === "ping"
+                    }
+                    MetricTile {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        title: "Джиттер"
+                        iconPath: Icons.jitter
+                        value: window.dashboard.jitter
+                        unit: "мс"
+                        active: window.dashboard.activeMetric === "ping"
+                    }
+                    MetricTile {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        title: "Загрузка"
+                        iconPath: Icons.download
+                        value: window.dashboard.download
+                        unit: "Мбит/с"
+                        active: window.dashboard.activeMetric === "download"
+                    }
+                    MetricTile {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        title: "Отдача"
+                        iconPath: Icons.upload
+                        value: window.dashboard.upload
+                        unit: "Мбит/с"
+                        active: window.dashboard.activeMetric === "upload"
+                    }
                 }
-                Button {
-                    flat: true
-                    text: "Определить подключение"
-                    font.capitalization: Font.MixedCase
-                    enabled: !window.dashboard.busy
-                    onClicked: window.dashboard.detectConnection()
+
+                Card {
+                    objectName: "details"
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignTop
+                    spacing: 14
+
+                    DetailRow {
+                        Layout.fillWidth: true
+                        iconPath: Icons.server
+                        title: "Сервер измерения"
+                        value: window.dashboard.serverText
+                        muted: !window.dashboard.serverKnown
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 1
+                        color: Theme.border
+                    }
+                    DetailRow {
+                        Layout.fillWidth: true
+                        iconPath: Icons.connection
+                        title: "Подключение"
+                        value: window.dashboard.connectionText
+                        muted: !window.dashboard.connectionKnown
+
+                        ActionButton {
+                            objectName: "detectButton"
+                            kind: "quiet"
+                            text: window.dashboard.detecting ? "Остановить" : "Определить"
+                            iconPath: Icons.refresh
+                            busy: window.dashboard.detecting
+                            enabled: !window.dashboard.measuring
+                                     && !(window.dashboard.detecting && window.dashboard.stopping)
+                            onClicked: window.dashboard.detecting ? window.dashboard.cancel()
+                                                                  : window.dashboard.detectConnection()
+                        }
+                    }
                 }
-            }
 
-            Label {
-                Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                visible: text.length > 0
-                wrapMode: Text.WordWrap
-                text: window.dashboard.notices
-                color: window.toneColor(window.dashboard.noticeTone)
-            }
-
-            Repeater {
-                model: window.dashboard.results
-
-                delegate: InfoCard {
-                    required property var modelData
-
-                    Layout.leftMargin: 16
-                    Layout.rightMargin: 16
-                    title: modelData.title
-                    subtitle: modelData.subtitle
+                Card {
+                    objectName: "results"
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignTop
+                    // Only runs that measure several services have it.
+                    visible: window.dashboard.results.length > 0
+                    spacing: 14
 
                     Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: modelData.details
+                        text: "Итоги по сервисам"
+                        font.pixelSize: Theme.textHeadline
+                        font.weight: Font.DemiBold
+                    }
+                    Repeater {
+                        model: window.dashboard.results
+
+                        delegate: ColumnLayout {
+                            id: resultItem
+
+                            required property var modelData
+                            required property int index
+
+                            Layout.fillWidth: true
+                            spacing: 14
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: resultItem.index > 0
+                                implicitHeight: 1
+                                color: Theme.border
+                            }
+                            ResultRow {
+                                Layout.fillWidth: true
+                                result: resultItem.modelData
+                            }
+                        }
                     }
                 }
             }
-
-            Item {
-                Layout.preferredHeight: 4
-            }
-        }
-    }
-
-    footer: Pane {
-        padding: 12
-        Material.background: window.surfaceColor
-
-        // Drawn without Material elevation so that the primary action stays
-        // visible with the software renderer too.
-        Button {
-            id: startButton
-
-            width: parent.width
-            text: window.dashboard.startLabel
-            enabled: !window.dashboard.stopping
-            onClicked: window.dashboard.toggleMeasurement()
-
-            contentItem: Label {
-                text: startButton.text
-                color: "#ffffff"
-                font.bold: true
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
-            }
-            background: Rectangle {
-                implicitHeight: 48
-                radius: 12
-                color: !startButton.enabled ? (window.dark ? "#3b4a52" : "#94a3ab")
-                     : window.dashboard.busy ? (startButton.down ? "#b91c1c" : "#dc2626")
-                     : (startButton.down ? "#0e7490" : "#0891b2")
-            }
-        }
-    }
-
-    SettingsDialog {
-        id: settingsDialog
-
-        objectName: "settingsDialog"
-        dashboard: window.dashboard
-        onFailed: message => window.showError(message)
-    }
-
-    Dialog {
-        id: errorDialog
-
-        property string message
-
-        objectName: "errorDialog"
-        parent: T.Overlay.overlay
-        x: Math.round((parent.width - width) / 2)
-        y: Math.round((parent.height - height) / 2)
-        width: Math.min(420, parent.width - 32)
-        modal: true
-        title: "Ошибка"
-
-        background: Rectangle {
-            radius: 4
-            color: errorDialog.Material.dialogColor
-        }
-        footer: DialogButtonBox {
-            Button {
-                flat: true
-                text: "ОК"
-                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-            }
         }
 
-        Label {
-            width: parent.width
-            wrapMode: Text.WordWrap
-            text: errorDialog.message
+        SettingsPanel {
+            id: settings
+
+            objectName: "settingsPanel"
+            anchors.top: titleBar.bottom
+            anchors.bottom: parent.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            fullWidth: root.width < 560
+            leftInset: root.SafeArea.margins.left
+            rightInset: root.SafeArea.margins.right
+            bottomInset: root.SafeArea.margins.bottom
+            dashboard: window.dashboard
+        }
+
+        Toast {
+            id: toast
+
+            objectName: "toast"
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 16 + root.SafeArea.margins.bottom
+            width: Math.min(460, parent.width - 32)
+        }
+
+        // Without a system frame the window draws its edge and resizes from it.
+        Rectangle {
+            anchors.fill: parent
+            visible: window.ownFrame && window.visibility === Window.Windowed
+            color: "transparent"
+            border.width: 1
+            border.color: Theme.borderStrong
+        }
+        ResizeFrame {
+            anchors.fill: parent
+            visible: window.ownFrame && window.visibility === Window.Windowed
+            window: window
         }
     }
 }

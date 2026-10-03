@@ -4,6 +4,7 @@
 #include "puls/core/text.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace puls::gui {
 
@@ -28,6 +29,8 @@ constexpr app::PhaseSelection phases[] = {app::PhaseSelection::all, app::PhaseSe
                                           app::PhaseSelection::download,
                                           app::PhaseSelection::upload};
 constexpr ThemeMode themes[] = {ThemeMode::system, ThemeMode::light, ThemeMode::dark};
+// The phases that the dashboard shows, in the order of a measurement.
+constexpr Phase shown_phases[] = {Phase::ping, Phase::download, Phase::upload};
 
 template <class T, std::size_t Size>
 int index_of(const T (&values)[Size], T value) noexcept {
@@ -63,14 +66,10 @@ std::string phase_status(Phase phase) {
     return "Выполнение…";
 }
 
-std::string phase_unit(Phase phase) {
-    return phase == Phase::ping ? "мс" : "Мбит/с";
-}
-
 std::string phase_title(Phase phase) {
     switch (phase) {
     case Phase::select:
-        return "Сервер";
+        return "Выбор сервера";
     case Phase::ping:
         return "Задержка";
     case Phase::download:
@@ -80,7 +79,64 @@ std::string phase_title(Phase phase) {
     case Phase::connection:
         break;
     }
-    return std::string(service::to_string(phase));
+    return "Подключение";
+}
+
+Metric phase_metric(Phase phase) noexcept {
+    switch (phase) {
+    case Phase::ping:
+        return Metric::ping;
+    case Phase::download:
+        return Metric::download;
+    case Phase::upload:
+        return Metric::upload;
+    default:
+        return Metric::none;
+    }
+}
+
+bool selected(app::PhaseSelection only, Phase phase) noexcept {
+    switch (only) {
+    case app::PhaseSelection::ping:
+        return phase == Phase::ping;
+    case app::PhaseSelection::download:
+        return phase == Phase::download;
+    case app::PhaseSelection::upload:
+        return phase == Phase::upload;
+    case app::PhaseSelection::all:
+        break;
+    }
+    return true;
+}
+
+std::vector<PhaseView> initial_phases(app::PhaseSelection only) {
+    std::vector<PhaseView> views;
+    for (const Phase phase : shown_phases) {
+        views.push_back({phase_title(phase),
+                         selected(only, phase) ? PhaseState::pending : PhaseState::skipped, 0});
+    }
+    return views;
+}
+
+PhaseState phase_state(Status status) noexcept {
+    switch (status) {
+    case Status::pending:
+        return PhaseState::pending;
+    case Status::ok:
+    case Status::partial:
+        return PhaseState::done;
+    case Status::error:
+        return PhaseState::failed;
+    case Status::skipped:
+    case Status::canceled:
+        break;
+    }
+    return PhaseState::skipped;
+}
+
+void set_phase_state(PhaseView& view, PhaseState state) noexcept {
+    view.state = state;
+    view.progress = state == PhaseState::done || state == PhaseState::failed ? 1 : 0;
 }
 
 std::string status_text(Status status) {
@@ -96,12 +152,24 @@ std::string status_text(Status status) {
     }
 }
 
-std::string phase_value(const app::PhaseResult& result, std::string_view unit) {
+Tone status_tone(Status status) noexcept {
+    switch (status) {
+    case Status::ok:
+        return Tone::success;
+    case Status::partial:
+    case Status::canceled:
+        return Tone::warning;
+    default:
+        return Tone::danger;
+    }
+}
+
+std::string phase_value(const app::PhaseResult& result) {
     if (result.mbps) {
-        return format_number(*result.mbps) + " " + std::string(unit);
+        return format_speed(*result.mbps) + " Мбит/с";
     }
     if (result.value_ms) {
-        return format_number(*result.value_ms) + " " + std::string(unit);
+        return format_latency(*result.value_ms) + " мс";
     }
     if (result.status == Status::error) {
         return "ошибка";
@@ -109,24 +177,41 @@ std::string phase_value(const app::PhaseResult& result, std::string_view unit) {
     return "—";
 }
 
-ResultCard measurement_card(const app::MeasurementResult& result) {
-    ResultCard card;
-    card.title = display_service(result.service) + " · " + status_text(result.status);
-    card.subtitle = "Сервер не выбран";
-    if (result.server) {
-        card.subtitle = result.server->name;
-        if (result.server->city) {
-            card.subtitle += " · " + *result.server->city;
-        }
+std::string server_text(const std::optional<app::ServerResult>& server) {
+    if (!server) {
+        return {};
     }
-    card.details = text::join(
-        {
-            "Задержка  " + phase_value(result.phases.ping, "мс"),
-            "Загрузка  " + phase_value(result.phases.download, "Мбит/с"),
-            "Отдача  " + phase_value(result.phases.upload, "Мбит/с"),
-        },
-        "    ");
-    return card;
+    return format_server({server->name, server->city.value_or(""), server->region.value_or("")});
+}
+
+ServiceResult service_result(const app::MeasurementResult& result) {
+    ServiceResult value;
+    value.service = display_service(result.service);
+    value.status = status_text(result.status);
+    value.tone = status_tone(result.status);
+    value.ping = phase_value(result.phases.ping);
+    value.download = phase_value(result.phases.download);
+    value.upload = phase_value(result.phases.upload);
+    value.server = server_text(result.server);
+    return value;
+}
+
+std::string_view plural(int count, std::string_view one, std::string_view few,
+                        std::string_view many) noexcept {
+    const int tens = count % 100;
+    const int units = count % 10;
+    if (tens >= 11 && tens <= 14) {
+        return many;
+    }
+    if (units == 1) {
+        return one;
+    }
+    return units >= 2 && units <= 4 ? few : many;
+}
+
+std::string decimal_comma(std::string value) {
+    std::replace(value.begin(), value.end(), '.', ',');
+    return value;
 }
 
 } // namespace
@@ -152,6 +237,36 @@ std::optional<ThemeMode> parse_theme_mode(std::string_view text) {
     return std::nullopt;
 }
 
+std::string_view to_string(PhaseState state) noexcept {
+    switch (state) {
+    case PhaseState::active:
+        return "active";
+    case PhaseState::done:
+        return "done";
+    case PhaseState::failed:
+        return "failed";
+    case PhaseState::skipped:
+        return "skipped";
+    case PhaseState::pending:
+        break;
+    }
+    return "pending";
+}
+
+std::string_view to_string(Metric metric) noexcept {
+    switch (metric) {
+    case Metric::ping:
+        return "ping";
+    case Metric::download:
+        return "download";
+    case Metric::upload:
+        return "upload";
+    case Metric::none:
+        break;
+    }
+    return "";
+}
+
 app::MeasureRequest Settings::request() const {
     app::MeasureRequest request;
     request.service = service;
@@ -166,14 +281,29 @@ app::MeasureRequest Settings::request() const {
 
 const std::vector<std::string>& service_labels() {
     static const std::vector<std::string> labels = {"Яндекс.Интернетометр", "speedtest.ru",
-                                                    "Все сервисы"};
+                                                    "Оба сервиса"};
     return labels;
 }
 
-const std::vector<std::string>& profile_labels() {
-    static const std::vector<std::string> labels = {"Быстрый · 5 с", "Сбалансированный · 10 с",
-                                                    "Точный · 15 с"};
-    return labels;
+const std::vector<std::string>& service_names() {
+    static const std::vector<std::string> names = {"Яндекс", "speedtest.ru", "Оба"};
+    return names;
+}
+
+const std::vector<std::string>& profile_names() {
+    static const std::vector<std::string> names = {"Быстрый", "Сбалансированный", "Точный"};
+    return names;
+}
+
+const std::vector<std::string>& profile_details() {
+    static const std::vector<std::string> details = [] {
+        std::vector<std::string> values;
+        for (const app::Profile profile : profiles) {
+            values.push_back(std::to_string(app::profile_duration(profile).count()) + " с");
+        }
+        return values;
+    }();
+    return details;
 }
 
 const std::vector<std::string>& connection_labels() {
@@ -191,6 +321,11 @@ const std::vector<std::string>& phase_labels() {
     static const std::vector<std::string> labels = {"Все этапы", "Только задержка",
                                                     "Только загрузка", "Только отдача"};
     return labels;
+}
+
+const std::vector<std::string>& phase_names() {
+    static const std::vector<std::string> names = {"Все", "Задержка", "Загрузка", "Отдача"};
+    return names;
 }
 
 const std::vector<std::string>& theme_labels() {
@@ -263,16 +398,58 @@ Result<Settings> parse_settings(const SettingsInput& input) {
 }
 
 std::string settings_summary(const Settings& settings) {
-    const std::string& profile =
-        profile_labels()[static_cast<std::size_t>(profile_index(settings.profile))];
-    return text::join(
-        {
-            profile.substr(0, profile.find(" · ")),
-            std::to_string(settings.duration.count()) + " с",
-            connection_labels()[static_cast<std::size_t>(connection_index(settings.connections))],
-            phase_labels()[static_cast<std::size_t>(phase_index(settings.only))],
-        },
-        "  ·  ");
+    std::vector<std::string> parts = {
+        profile_names()[static_cast<std::size_t>(profile_index(settings.profile))],
+        std::to_string(settings.duration.count()) + " с",
+    };
+    if (settings.connections > 0) {
+        parts.push_back(
+            std::to_string(settings.connections) + " " +
+            std::string(plural(settings.connections, "соединение", "соединения", "соединений")));
+    }
+    switch (settings.only) {
+    case app::PhaseSelection::ping:
+        parts.emplace_back("только задержка");
+        break;
+    case app::PhaseSelection::download:
+        parts.emplace_back("только загрузка");
+        break;
+    case app::PhaseSelection::upload:
+        parts.emplace_back("только отдача");
+        break;
+    case app::PhaseSelection::all:
+        break;
+    }
+    return text::join(parts, " · ");
+}
+
+std::string idle_hint(const Settings& settings) {
+    std::string measured = "задержку, загрузку и отдачу";
+    switch (settings.only) {
+    case app::PhaseSelection::ping:
+        measured = "задержку";
+        break;
+    case app::PhaseSelection::download:
+        measured = "загрузку";
+        break;
+    case app::PhaseSelection::upload:
+        measured = "отдачу";
+        break;
+    case app::PhaseSelection::all:
+        break;
+    }
+    std::string through = "через Яндекс.Интернетометр";
+    switch (settings.service) {
+    case ServiceId::speedtest:
+        through = "через speedtest.ru";
+        break;
+    case ServiceId::all:
+        through = "через Яндекс.Интернетометр и speedtest.ru по очереди";
+        break;
+    case ServiceId::yandex:
+        break;
+    }
+    return "Измерим " + measured + " " + through + ".";
 }
 
 std::string display_service(ServiceId id) {
@@ -280,7 +457,7 @@ std::string display_service(ServiceId id) {
     case ServiceId::yandex:
         return "Яндекс.Интернетометр";
     case ServiceId::all:
-        return "Все сервисы";
+        return "Оба сервиса";
     case ServiceId::speedtest:
         break;
     }
@@ -298,10 +475,20 @@ std::string format_server(const service::Server& server) {
     return text::join(parts, " · ");
 }
 
-std::string format_number(double value) {
-    std::string formatted = text::format_fixed(value, 2);
-    std::replace(formatted.begin(), formatted.end(), '.', ',');
-    return formatted;
+std::string format_speed(double mbps) {
+    if (!std::isfinite(mbps)) {
+        return "—";
+    }
+    // The thresholds take rounding into account: 99,96 becomes "100".
+    const int decimals = mbps >= 99.95 ? 0 : mbps >= 9.995 ? 1 : 2;
+    return decimal_comma(text::format_fixed(mbps, decimals));
+}
+
+std::string format_latency(double milliseconds) {
+    if (!std::isfinite(milliseconds)) {
+        return "—";
+    }
+    return decimal_comma(text::format_fixed(milliseconds, milliseconds >= 9.95 ? 0 : 1));
 }
 
 Preferences load_preferences(const PreferenceStore& store) {
@@ -366,19 +553,15 @@ Dashboard::Dashboard(PreferenceStore& store)
     settings_.connections = preferences_.connections;
     settings_.only = preferences_.only;
     settings_.theme = preferences_.theme;
+    state_.phases = initial_phases(settings_.only);
+    previous_connection_ = state_.connection;
 }
 
 std::string Dashboard::start_label() const {
-    switch (state_.activity) {
-    case Activity::measurement:
-    case Activity::connection:
-        return "Остановить";
-    case Activity::stopping:
-        return "Останавливаем…";
-    case Activity::idle:
-        break;
+    if (measuring()) {
+        return state_.stopping ? "Останавливаем…" : "Остановить";
     }
-    return state_.completed_once ? "Проверить снова" : "Начать проверку";
+    return state_.has_result ? "Проверить снова" : "Начать проверку";
 }
 
 app::ConnectionRequest Dashboard::connection_request() const {
@@ -429,6 +612,10 @@ Error Dashboard::apply_settings(const SettingsInput& input) {
     settings_ = std::move(parsed).value();
     save_measurement(store_, settings_);
     apply_theme(settings_.theme);
+    // Before the first measurement the phases show what will be measured.
+    if (!busy() && !state_.has_result) {
+        state_.phases = initial_phases(settings_.only);
+    }
     return {};
 }
 
@@ -436,43 +623,65 @@ void Dashboard::save_window(double width, double height) {
     gui::save_window(store_, width, height);
 }
 
-void Dashboard::reset_metrics() {
+void Dashboard::reset_service() {
+    state_.hero_value.clear();
+    state_.hero_unit = "Мбит/с";
+    state_.hero_label.clear();
+    state_.phases = initial_phases(settings_.only);
+    state_.active_metric = Metric::none;
     state_.ping = "—";
     state_.jitter = "—";
     state_.download = "—";
     state_.upload = "—";
+    state_.server = "Выбор сервера измерения…";
+    state_.server_known = false;
 }
 
 void Dashboard::begin_measurement() {
     state_.status = "Подготовка проверки…";
     state_.status_tone = Tone::neutral;
-    state_.current_value = "—";
-    state_.current_unit = "Мбит/с";
-    state_.progress = 0;
-    state_.progress_visible = true;
-    state_.server = "Выбор сервера измерения…";
+    state_.service_progress.clear();
     state_.notices.clear();
     state_.notice_tone = Tone::warning;
     state_.results.clear();
-    reset_metrics();
+    reset_service();
+    run_services_ = settings_.service == ServiceId::all ? 2 : 1;
+    started_services_ = 0;
+    service_.reset();
     state_.activity = Activity::measurement;
+    state_.stopping = false;
 }
 
 void Dashboard::begin_connection() {
-    state_.status = "Определение подключения…";
-    state_.status_tone = Tone::neutral;
-    state_.progress = 0;
-    state_.progress_visible = true;
-    state_.notices.clear();
-    state_.notice_tone = Tone::warning;
-    state_.connection = "Определение IP и интернет-провайдера…";
+    start_lookup();
     state_.activity = Activity::connection;
+    state_.stopping = false;
 }
 
 void Dashboard::begin_stopping() {
     if (busy()) {
-        state_.activity = Activity::stopping;
+        state_.stopping = true;
     }
+}
+
+void Dashboard::start_lookup() {
+    if (lookup_active_) {
+        return;
+    }
+    lookup_active_ = true;
+    previous_connection_ = state_.connection;
+    previous_connection_known_ = state_.connection_known;
+    state_.connection = "Определение IP и интернет-провайдера…";
+    state_.connection_known = false;
+}
+
+PhaseView* Dashboard::phase_view(Phase phase) {
+    for (std::size_t index = 0; index < std::size(shown_phases); ++index) {
+        if (shown_phases[index] == phase && index < state_.phases.size()) {
+            return &state_.phases[index];
+        }
+    }
+    return nullptr;
 }
 
 std::string* Dashboard::metric(Phase phase) {
@@ -488,44 +697,72 @@ std::string* Dashboard::metric(Phase phase) {
     }
 }
 
+std::string Dashboard::notice_subject(std::string_view subject) const {
+    if (run_services_ > 1 && service_) {
+        return std::string(subject) + " (" + display_service(*service_) + ")";
+    }
+    return std::string(subject);
+}
+
 void Dashboard::apply_event(const app::RunEvent& event) {
     switch (event.kind) {
+    case app::EventKind::connection_started:
+        start_lookup();
+        break;
+    case app::EventKind::connection_completed:
+        if (event.connection) {
+            apply_connection(*event.connection);
+        }
+        break;
     case app::EventKind::service_started:
         if (event.service) {
-            state_.status = "Сервис: " + display_service(*event.service);
+            ++started_services_;
+            service_ = event.service;
+            if (started_services_ > 1) {
+                reset_service();
+            }
+            if (run_services_ > 1) {
+                state_.service_progress = "Сервис " + std::to_string(started_services_) + " из " +
+                                          std::to_string(run_services_) + " · " +
+                                          display_service(*event.service);
+            }
         }
         break;
     case app::EventKind::phase_started:
         if (event.phase) {
-            state_.status = phase_status(*event.phase);
-            state_.current_unit = phase_unit(*event.phase);
+            start_phase(*event.phase);
         }
         break;
     case app::EventKind::server_selected:
         if (event.server) {
             state_.server = format_server(*event.server);
+            state_.server_known = true;
         }
         break;
     case app::EventKind::ping_completed:
         if (event.ping) {
-            state_.current_value = format_number(event.ping->value_ms);
-            state_.current_unit = "мс";
-            state_.ping = format_number(event.ping->value_ms);
-            state_.jitter = format_number(event.ping->jitter_ms);
+            state_.ping = format_latency(event.ping->value_ms);
+            state_.jitter = format_latency(event.ping->jitter_ms);
+            state_.hero_value = state_.ping;
         }
         break;
     case app::EventKind::throughput_progress:
-        if (event.throughput) {
-            state_.current_value = format_number(event.throughput->mbps);
-            state_.current_unit = "Мбит/с";
-            const auto duration =
-                std::chrono::duration_cast<std::chrono::nanoseconds>(settings_.duration);
-            state_.progress =
-                duration.count() > 0
-                    ? std::clamp(static_cast<double>(event.throughput->elapsed.count()) /
-                                     static_cast<double>(duration.count()),
-                                 0.0, 1.0)
-                    : 0;
+        if (event.phase && event.throughput) {
+            const std::string value = format_speed(event.throughput->mbps);
+            if (std::string* tile = metric(*event.phase)) {
+                *tile = value;
+            }
+            state_.hero_value = value;
+            if (PhaseView* view = phase_view(*event.phase)) {
+                const auto duration =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(settings_.duration);
+                view->progress =
+                    duration.count() > 0
+                        ? std::clamp(static_cast<double>(event.throughput->elapsed.count()) /
+                                         static_cast<double>(duration.count()),
+                                     0.0, 1.0)
+                        : 0;
+            }
         }
         break;
     case app::EventKind::phase_completed:
@@ -533,57 +770,109 @@ void Dashboard::apply_event(const app::RunEvent& event) {
             apply_phase_result(*event.phase, *event.phase_result);
         }
         break;
-    case app::EventKind::connection_completed:
-        if (event.connection) {
-            apply_connection(*event.connection);
-        }
-        break;
     case app::EventKind::service_completed:
         if (event.measurement) {
-            state_.results.push_back(measurement_card(*event.measurement));
-            for (const auto& warning : event.measurement->warnings) {
-                add_notice(Tone::warning, warning);
-            }
+            apply_measurement(*event.measurement);
         }
         break;
     case app::EventKind::run_started:
-    case app::EventKind::connection_started:
     case app::EventKind::run_completed:
         break;
     }
 }
 
-void Dashboard::apply_phase_result(Phase phase, const app::PhaseResult& result) {
-    if (result.status == Status::ok && result.mbps) {
-        if (std::string* value = metric(phase)) {
-            *value = format_number(*result.mbps);
-        }
-        state_.current_value = format_number(*result.mbps);
-        state_.current_unit = "Мбит/с";
+void Dashboard::start_phase(Phase phase) {
+    state_.status = phase_status(phase);
+    PhaseView* view = phase_view(phase);
+    if (view == nullptr) {
         return;
     }
+    view->state = PhaseState::active;
+    // Latency has no progress; throughput reports its elapsed time.
+    view->progress = phase == Phase::ping ? -1 : 0;
+    state_.active_metric = phase_metric(phase);
+    state_.hero_value.clear();
+    state_.hero_unit = phase == Phase::ping ? "мс" : "Мбит/с";
+    state_.hero_label = phase_title(phase);
+}
+
+void Dashboard::apply_phase_result(Phase phase, const app::PhaseResult& result) {
+    const PhaseState state = phase_state(result.status);
+    if (PhaseView* view = phase_view(phase)) {
+        set_phase_state(*view, state);
+    }
+    if (state_.active_metric == phase_metric(phase)) {
+        state_.active_metric = Metric::none;
+    }
+    if (state == PhaseState::done && result.mbps) {
+        const std::string value = format_speed(*result.mbps);
+        if (std::string* tile = metric(phase)) {
+            *tile = value;
+        }
+        state_.hero_value = value;
+    } else if (state != PhaseState::done && phase != Phase::select) {
+        // A failed or stopped phase has no result, whatever it showed live.
+        if (std::string* tile = metric(phase)) {
+            *tile = "—";
+            if (phase == Phase::ping) {
+                state_.jitter = "—";
+            }
+        }
+        if (state_.hero_label == phase_title(phase)) {
+            state_.hero_value.clear();
+        }
+    }
     if (result.status == Status::error && result.error) {
-        add_notice(Tone::danger, phase_title(phase) + ": " + result.error->message);
+        add_notice(Tone::danger, notice_subject(phase_title(phase)) + ": " + result.error->message);
+    }
+}
+
+void Dashboard::apply_measurement(const app::MeasurementResult& result) {
+    // The final states; a failed server selection skips the phases without
+    // completing them one by one.
+    const app::PhaseResult* results[] = {&result.phases.ping, &result.phases.download,
+                                         &result.phases.upload};
+    for (std::size_t index = 0; index < std::size(results); ++index) {
+        if (PhaseView* view = phase_view(shown_phases[index])) {
+            set_phase_state(*view, phase_state(results[index]->status));
+        }
+    }
+    if (!result.server) {
+        state_.server = "Сервер не выбран";
+        state_.server_known = false;
+    }
+    state_.active_metric = Metric::none;
+    if (run_services_ > 1) {
+        state_.results.push_back(service_result(result));
+    }
+    for (const auto& warning : result.warnings) {
+        add_notice(Tone::warning,
+                   run_services_ > 1 ? display_service(result.service) + ": " + warning : warning);
     }
 }
 
 void Dashboard::apply_connection(const app::ConnectionResult& result) {
+    lookup_active_ = false;
+    if (result.status == Status::canceled) {
+        state_.connection = previous_connection_;
+        state_.connection_known = previous_connection_known_;
+        return;
+    }
     if (result.status != Status::ok || !result.external_ip) {
         std::string message = "Не удалось определить IP";
         if (result.error) {
             message += ": " + result.error->message;
         }
         state_.connection = std::move(message);
+        state_.connection_known = false;
         return;
     }
     std::vector<std::string> parts = {*result.external_ip};
     if (result.isp) {
         parts.push_back(*result.isp);
     }
-    if (result.detected_by) {
-        parts.push_back("через " + display_service(*result.detected_by));
-    }
     state_.connection = text::join(parts, " · ");
+    state_.connection_known = true;
     for (const auto& warning : result.warnings) {
         add_notice(Tone::warning, warning);
     }
@@ -603,8 +892,34 @@ void Dashboard::add_notice(Tone tone, std::string_view message) {
     state_.notices.push_back(trimmed);
 }
 
+void Dashboard::show_summary(const app::Envelope& envelope) {
+    // The download speed of the last service with a value, otherwise its
+    // upload speed or latency.
+    for (auto result = envelope.results.rbegin(); result != envelope.results.rend(); ++result) {
+        const app::MeasurementPhases& measured = result->phases;
+        if (measured.download.mbps) {
+            state_.hero_value = format_speed(*measured.download.mbps);
+            state_.hero_unit = "Мбит/с";
+            state_.hero_label = phase_title(Phase::download);
+        } else if (measured.upload.mbps) {
+            state_.hero_value = format_speed(*measured.upload.mbps);
+            state_.hero_unit = "Мбит/с";
+            state_.hero_label = phase_title(Phase::upload);
+        } else if (measured.ping.value_ms) {
+            state_.hero_value = format_latency(*measured.ping.value_ms);
+            state_.hero_unit = "мс";
+            state_.hero_label = phase_title(Phase::ping);
+        } else {
+            continue;
+        }
+        state_.hero_label += " · " + display_service(result->service);
+        return;
+    }
+    state_.hero_value.clear();
+    state_.hero_label = "Нет результата";
+}
+
 void Dashboard::finish_measurement(const app::Envelope& envelope) {
-    state_.progress_visible = false;
     switch (envelope.status) {
     case Status::ok:
         state_.status = "Проверка завершена";
@@ -623,27 +938,27 @@ void Dashboard::finish_measurement(const app::Envelope& envelope) {
         state_.status_tone = Tone::danger;
         break;
     }
-    finish_run();
+    // Nothing is in progress any more.
+    for (PhaseView& view : state_.phases) {
+        if (view.state == PhaseState::pending || view.state == PhaseState::active) {
+            set_phase_state(view, PhaseState::skipped);
+        }
+    }
+    state_.active_metric = Metric::none;
+    state_.service_progress.clear();
+    show_summary(envelope);
+    state_.activity = Activity::idle;
+    state_.stopping = false;
+    state_.has_result = true;
 }
 
 void Dashboard::finish_connection(const app::ConnectionResult& result) {
-    state_.progress_visible = false;
-    if (result.status == Status::canceled) {
-        state_.status = "Определение подключения остановлено";
-        state_.status_tone = Tone::warning;
-    } else if (result.status == Status::ok) {
-        state_.status = "Подключение определено";
-        state_.status_tone = Tone::success;
-    } else {
-        state_.status = "Не удалось определить подключение";
-        state_.status_tone = Tone::danger;
+    // The runner reports the result as an event first.
+    if (lookup_active_) {
+        apply_connection(result);
     }
-    finish_run();
-}
-
-void Dashboard::finish_run() {
     state_.activity = Activity::idle;
-    state_.completed_once = true;
+    state_.stopping = false;
 }
 
 } // namespace puls::gui

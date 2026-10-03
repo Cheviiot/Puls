@@ -1,9 +1,13 @@
 #include "puls/gui/controller.hpp"
 
+#include <QGuiApplication>
 #include <QMetaObject>
+#include <QStyleHints>
 #include <QVariantMap>
 
 #include <cmath>
+#include <memory>
+#include <optional>
 #include <utility>
 
 namespace puls::gui {
@@ -25,6 +29,16 @@ QStringList labels(const std::vector<std::string>& values) {
 
 int tone(Tone value) {
     return static_cast<int>(value);
+}
+
+// Errors read like the terminal output, "длительность должна быть…"; the
+// window shows them as sentences.
+QString sentence(const Error& error) {
+    QString message = qstring(error.message());
+    if (!message.isEmpty()) {
+        message[0] = message[0].toUpper();
+    }
+    return message;
 }
 
 } // namespace
@@ -49,8 +63,16 @@ QStringList DashboardController::serviceLabels() const {
     return labels(service_labels());
 }
 
-QStringList DashboardController::profileLabels() const {
-    return labels(profile_labels());
+QStringList DashboardController::serviceNames() const {
+    return labels(service_names());
+}
+
+QStringList DashboardController::profileNames() const {
+    return labels(profile_names());
+}
+
+QStringList DashboardController::profileDetails() const {
+    return labels(profile_details());
 }
 
 QStringList DashboardController::connectionLabels() const {
@@ -59,6 +81,10 @@ QStringList DashboardController::connectionLabels() const {
 
 QStringList DashboardController::phaseLabels() const {
     return labels(phase_labels());
+}
+
+QStringList DashboardController::phaseNames() const {
+    return labels(phase_names());
 }
 
 QStringList DashboardController::themeLabels() const {
@@ -71,6 +97,14 @@ int DashboardController::windowWidth() const {
 
 int DashboardController::windowHeight() const {
     return static_cast<int>(std::lround(model_.preferences().window_height));
+}
+
+int DashboardController::minimumWindowWidth() const {
+    return static_cast<int>(minimum_window_width);
+}
+
+int DashboardController::minimumWindowHeight() const {
+    return static_cast<int>(minimum_window_height);
 }
 
 void DashboardController::setSystemDark(bool dark) {
@@ -120,8 +154,8 @@ QString DashboardController::settingsSummary() const {
     return qstring(settings_summary(model_.settings()));
 }
 
-bool DashboardController::stopping() const {
-    return model_.state().activity == Activity::stopping;
+QString DashboardController::idleHint() const {
+    return qstring(idle_hint(model_.settings()));
 }
 
 QString DashboardController::startLabel() const {
@@ -136,20 +170,36 @@ int DashboardController::statusTone() const {
     return tone(model_.state().status_tone);
 }
 
-QString DashboardController::currentValue() const {
-    return qstring(model_.state().current_value);
+QString DashboardController::heroValue() const {
+    return qstring(model_.state().hero_value);
 }
 
-QString DashboardController::currentUnit() const {
-    return qstring(model_.state().current_unit);
+QString DashboardController::heroUnit() const {
+    return qstring(model_.state().hero_unit);
 }
 
-double DashboardController::progress() const {
-    return model_.state().progress;
+QString DashboardController::heroLabel() const {
+    return qstring(model_.state().hero_label);
 }
 
-bool DashboardController::progressVisible() const {
-    return model_.state().progress_visible;
+QVariantList DashboardController::phases() const {
+    QVariantList result;
+    for (const PhaseView& phase : model_.state().phases) {
+        result.append(QVariantMap{
+            {QStringLiteral("title"), qstring(phase.title)},
+            {QStringLiteral("state"), QString::fromLatin1(to_string(phase.state))},
+            {QStringLiteral("progress"), phase.progress},
+        });
+    }
+    return result;
+}
+
+QString DashboardController::activeMetric() const {
+    return QString::fromLatin1(to_string(model_.state().active_metric));
+}
+
+QString DashboardController::serviceProgress() const {
+    return qstring(model_.state().service_progress);
 }
 
 QString DashboardController::ping() const {
@@ -186,22 +236,32 @@ int DashboardController::noticeTone() const {
 
 QVariantList DashboardController::results() const {
     QVariantList result;
-    for (const ResultCard& card : model_.state().results) {
-        result.append(QVariantMap{{QStringLiteral("title"), qstring(card.title)},
-                                  {QStringLiteral("subtitle"), qstring(card.subtitle)},
-                                  {QStringLiteral("details"), qstring(card.details)}});
+    for (const ServiceResult& value : model_.state().results) {
+        result.append(QVariantMap{
+            {QStringLiteral("service"), qstring(value.service)},
+            {QStringLiteral("status"), qstring(value.status)},
+            {QStringLiteral("tone"), tone(value.tone)},
+            {QStringLiteral("ping"), qstring(value.ping)},
+            {QStringLiteral("download"), qstring(value.download)},
+            {QStringLiteral("upload"), qstring(value.upload)},
+            {QStringLiteral("server"), qstring(value.server)},
+        });
     }
     return result;
 }
 
 void DashboardController::toggleMeasurement() {
-    if (model_.busy()) {
+    if (model_.measuring()) {
         cancel();
+        return;
+    }
+    // A connection lookup is stopped with its own button first.
+    if (model_.busy()) {
         return;
     }
     const app::MeasureRequest request = model_.settings().request();
     if (Error error = app::validate_measure_request(request)) {
-        emit errorOccurred(qstring(error.message()));
+        emit errorOccurred(sentence(error));
         return;
     }
     model_.begin_measurement();
@@ -252,7 +312,7 @@ QString DashboardController::applySettings(int service, int profile, const QStri
                                            int connections, int phase, const QString& server,
                                            bool showIp, int theme) {
     if (model_.busy()) {
-        return QStringLiteral("дождитесь завершения проверки");
+        return QStringLiteral("Дождитесь завершения проверки");
     }
     SettingsInput input;
     input.service = service;
@@ -264,7 +324,7 @@ QString DashboardController::applySettings(int service, int profile, const QStri
     input.show_ip = showIp;
     input.theme = theme;
     if (Error error = model_.apply_settings(input)) {
-        return qstring(error.message());
+        return sentence(error);
     }
     emit settingsChanged();
     return {};
@@ -314,6 +374,42 @@ void DashboardController::join() {
         worker_.join();
     }
     active_.reset();
+}
+
+void follow_system_theme(DashboardController& controller) {
+    QStyleHints* hints = QGuiApplication::styleHints();
+    const auto applied = std::make_shared<std::optional<ThemeMode>>();
+    const auto follow = [&controller, hints, applied] {
+        const ThemeMode theme = controller.theme();
+        if (*applied == theme) {
+            return;
+        }
+        *applied = theme;
+        switch (theme) {
+        case ThemeMode::light:
+            hints->setColorScheme(Qt::ColorScheme::Light);
+            break;
+        case ThemeMode::dark:
+            hints->setColorScheme(Qt::ColorScheme::Dark);
+            break;
+        case ThemeMode::system:
+            hints->unsetColorScheme();
+            // The system scheme may have changed while a theme was chosen.
+            controller.setSystemDark(hints->colorScheme() == Qt::ColorScheme::Dark);
+            break;
+        }
+    };
+    // Before a light or dark theme applies, the scheme is the system one.
+    controller.setSystemDark(hints->colorScheme() == Qt::ColorScheme::Dark);
+    follow();
+    QObject::connect(&controller, &DashboardController::settingsChanged, &controller, follow);
+    QObject::connect(hints, &QStyleHints::colorSchemeChanged, &controller,
+                     [&controller](Qt::ColorScheme scheme) {
+                         // A light or dark theme reports itself as the scheme.
+                         if (controller.theme() == ThemeMode::system) {
+                             controller.setSystemDark(scheme == Qt::ColorScheme::Dark);
+                         }
+                     });
 }
 
 } // namespace puls::gui

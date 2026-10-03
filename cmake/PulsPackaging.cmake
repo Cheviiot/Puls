@@ -71,7 +71,8 @@ function(puls_configure_macos_bundle target)
 endfunction()
 
 # Writes THIRD_PARTY_NOTICES.txt from the license files of the vcpkg ports
-# the executables are built with.
+# the executables are built with and of the fonts and icons of the graphical
+# interface.
 function(puls_add_third_party_notices)
     if(NOT DEFINED VCPKG_INSTALLED_DIR OR NOT DEFINED VCPKG_TARGET_TRIPLET)
         return()
@@ -79,13 +80,22 @@ function(puls_add_third_party_notices)
     file(READ "${PROJECT_SOURCE_DIR}/vcpkg.json" manifest)
     string(JSON baseline GET "${manifest}" builtin-baseline)
     set(notices "${PROJECT_BINARY_DIR}/THIRD_PARTY_NOTICES.txt")
+    set(gui_arguments)
+    set(gui_licenses)
+    if(PULS_BUILD_GUI)
+        set(gui_dir "${PROJECT_SOURCE_DIR}/src/puls/gui/qml")
+        set(gui_arguments "-DGUI_ASSETS_DIR=${gui_dir}")
+        set(gui_licenses "${gui_dir}/fonts/LICENSE.txt" "${gui_dir}/LICENSE.lucide.txt")
+    endif()
     add_custom_command(OUTPUT "${notices}"
         COMMAND "${CMAKE_COMMAND}"
             "-DPACKAGES_DIR=${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
             "-DVCPKG_BASELINE=${baseline}"
             "-DOUTPUT=${notices}"
+            ${gui_arguments}
             -P "${PROJECT_SOURCE_DIR}/cmake/PulsNotices.cmake"
         DEPENDS "${PROJECT_SOURCE_DIR}/cmake/PulsNotices.cmake" "${PROJECT_SOURCE_DIR}/vcpkg.json"
+            ${gui_licenses}
         VERBATIM)
     add_custom_target(puls_third_party_notices ALL DEPENDS "${notices}")
     install(FILES "${notices}" DESTINATION "${PULS_INSTALL_DOCDIR}")

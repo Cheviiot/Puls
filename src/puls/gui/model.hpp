@@ -36,7 +36,7 @@ struct Settings {
     [[nodiscard]] app::MeasureRequest request() const;
 };
 
-// Values entered in the settings dialog; list choices are indexes into the
+// Values entered in the settings panel; list choices are indexes into the
 // label lists below.
 struct SettingsInput {
     int service = -1;
@@ -49,10 +49,16 @@ struct SettingsInput {
     int theme = -1;
 };
 
+// Full names, for example for screen readers.
 const std::vector<std::string>& service_labels();
-const std::vector<std::string>& profile_labels();
+// Short names of the service selector.
+const std::vector<std::string>& service_names();
+const std::vector<std::string>& profile_names();
+// The phase duration of each profile: "5 с".
+const std::vector<std::string>& profile_details();
 const std::vector<std::string>& connection_labels();
 const std::vector<std::string>& phase_labels();
+const std::vector<std::string>& phase_names();
 const std::vector<std::string>& theme_labels();
 
 int service_index(service::ServiceId id) noexcept;
@@ -62,15 +68,19 @@ int phase_index(app::PhaseSelection only) noexcept;
 int theme_index(ThemeMode mode) noexcept;
 std::optional<app::Profile> profile_at(int index) noexcept;
 
-// Validates dialog input; every error is a Russian message for the user.
+// Validates panel input; every error is a Russian message for the user.
 Result<Settings> parse_settings(const SettingsInput& input);
-// "Быстрый  ·  8 с  ·  4  ·  Только задержка".
+// "Сбалансированный · 10 с"; connections and phases only when chosen.
 std::string settings_summary(const Settings& settings);
+// What a measurement with these settings does.
+std::string idle_hint(const Settings& settings);
 
 std::string display_service(service::ServiceId id);
 std::string format_server(const service::Server& server);
-// Two decimals with a decimal comma: "91,25".
-std::string format_number(double value);
+// Fewer decimals as a value grows, with a decimal comma: "8,75", "94,2", "487".
+std::string format_speed(double mbps);
+// "1,8", "12".
+std::string format_latency(double milliseconds);
 
 // Stores user preferences; the Qt layer implements it with QSettings.
 class PreferenceStore {
@@ -85,7 +95,7 @@ public:
 inline constexpr double default_window_width = 460;
 inline constexpr double default_window_height = 800;
 inline constexpr double minimum_window_width = 390;
-inline constexpr double minimum_window_height = 640;
+inline constexpr double minimum_window_height = 600;
 
 // Only the interface theme, measurement settings and window size are stored;
 // IP addresses, providers, servers, results and logs never are.
@@ -108,32 +118,63 @@ void save_window(PreferenceStore& store, double width, double height);
 
 enum class Tone : std::uint8_t { neutral, success, warning, danger };
 
-struct ResultCard {
+enum class PhaseState : std::uint8_t { pending, active, done, failed, skipped };
+
+std::string_view to_string(PhaseState state) noexcept;
+
+// One of the latency, download and upload phases of the active service.
+struct PhaseView {
     std::string title;
-    std::string subtitle;
-    std::string details;
+    PhaseState state = PhaseState::pending;
+    // From 0 to 1; negative while the phase has no measurable progress.
+    double progress = 0;
 };
 
-enum class Activity : std::uint8_t { idle, measurement, connection, stopping };
+// The metric that the measurement updates right now.
+enum class Metric : std::uint8_t { none, ping, download, upload };
+
+std::string_view to_string(Metric metric) noexcept;
+
+// The result of one service when the run measures several.
+struct ServiceResult {
+    std::string service;
+    std::string status;
+    Tone tone = Tone::neutral;
+    std::string ping;
+    std::string download;
+    std::string upload;
+    std::string server;
+};
+
+enum class Activity : std::uint8_t { idle, measurement, connection };
 
 struct DashboardState {
     std::string status = "Готов к проверке";
     Tone status_tone = Tone::neutral;
-    std::string current_value = "—";
-    std::string current_unit = "Мбит/с";
-    double progress = 0;
-    bool progress_visible = false;
+    // The main number: the live value of the active phase while measuring,
+    // then the result. Empty until a value is known.
+    std::string hero_value;
+    std::string hero_unit = "Мбит/с";
+    std::string hero_label;
+    std::vector<PhaseView> phases;
+    Metric active_metric = Metric::none;
+    // "Сервис 2 из 2 · speedtest.ru" while a run measures several services.
+    std::string service_progress;
     std::string ping = "—";
     std::string jitter = "—";
     std::string download = "—";
     std::string upload = "—";
-    std::string server = "Сервер измерения ещё не выбран";
+    std::string server = "Сервер ещё не выбран";
+    bool server_known = false;
     std::string connection = "IP и интернет-провайдер не определены";
+    bool connection_known = false;
     std::vector<std::string> notices;
     Tone notice_tone = Tone::warning;
-    std::vector<ResultCard> results;
+    std::vector<ServiceResult> results;
     Activity activity = Activity::idle;
-    bool completed_once = false;
+    bool stopping = false;
+    // A measurement has finished in this session.
+    bool has_result = false;
 };
 
 // The dashboard model. It is not thread-safe: every call happens on the
@@ -146,6 +187,12 @@ public:
     [[nodiscard]] const DashboardState& state() const noexcept { return state_; }
     [[nodiscard]] const Preferences& preferences() const noexcept { return preferences_; }
     [[nodiscard]] bool busy() const noexcept { return state_.activity != Activity::idle; }
+    [[nodiscard]] bool measuring() const noexcept {
+        return state_.activity == Activity::measurement;
+    }
+    [[nodiscard]] bool detecting() const noexcept {
+        return state_.activity == Activity::connection;
+    }
     [[nodiscard]] std::string start_label() const;
     [[nodiscard]] app::ConnectionRequest connection_request() const;
 
@@ -164,17 +211,33 @@ public:
     void add_notice(Tone tone, std::string_view message);
 
 private:
-    void reset_metrics();
+    // Clears what the dashboard shows about the measured service.
+    void reset_service();
     void apply_theme(ThemeMode mode);
+    void start_lookup();
+    void start_phase(service::Phase phase);
     void apply_phase_result(service::Phase phase, const app::PhaseResult& result);
+    void apply_measurement(const app::MeasurementResult& result);
     void apply_connection(const app::ConnectionResult& result);
-    void finish_run();
+    void show_summary(const app::Envelope& envelope);
+    // Names the service in notices when the run measures several.
+    [[nodiscard]] std::string notice_subject(std::string_view subject) const;
+    PhaseView* phase_view(service::Phase phase);
     std::string* metric(service::Phase phase);
 
     PreferenceStore& store_;
     Preferences preferences_;
     Settings settings_;
     DashboardState state_;
+    // The number of services in the active run, the started ones and the
+    // service being measured.
+    int run_services_ = 1;
+    int started_services_ = 0;
+    std::optional<service::ServiceId> service_;
+    // A connection lookup is running; stopping it restores the previous text.
+    bool lookup_active_ = false;
+    std::string previous_connection_;
+    bool previous_connection_known_ = false;
 };
 
 } // namespace puls::gui

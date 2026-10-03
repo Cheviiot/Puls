@@ -272,6 +272,9 @@ jobs:
           key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+      - name: Lint QML
+        if: matrix.gui == 'ON'
+        run: cmake --build --preset ${{ matrix.preset }} --target all_qmllint
       - name: Test
         id: test
         run: ctest --preset ${{ matrix.preset }}
@@ -333,6 +336,36 @@ jobs:
           fi
           kill "$pid"
           wait "$pid" || true
+      # The tests render offscreen, without the parts that the system draws,
+      # such as the window buttons on Windows and macOS. These screenshots
+      # show the windows of this build for review.
+      - name: Capture GUI screenshots
+        if: matrix.package-os != '' && matrix.gui == 'ON'
+        shell: bash
+        run: |
+          shots="$RUNNER_TEMP/gui-screenshots"
+          mkdir -p "$shots"
+          tests="build/${{ matrix.preset }}/tests/puls_gui_tests"
+          PULS_GUI_SCREENSHOTS="$shots" "$tests" --gtest_filter='GuiQml.*'
+          case "$RUNNER_OS" in
+            Linux)
+              Xvfb :98 -screen 0 1280x960x24 &
+              export DISPLAY=:98 QT_QPA_PLATFORM=xcb QT_QUICK_BACKEND=software
+              sleep 2
+              ;;
+            macOS) export QT_QPA_PLATFORM=cocoa ;;
+            Windows) export QT_QPA_PLATFORM=windows ;;
+          esac
+          PULS_GUI_NATIVE_SCREENSHOTS="$shots" "$tests" \
+            --gtest_filter='GuiQml.NativeWindowScreenshots'
+      - name: Upload GUI screenshots
+        if: matrix.package-os != '' && matrix.gui == 'ON'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gui-screenshots-${{ matrix.package-os }}-${{ matrix.package-arch }}
+          path: ${{ runner.temp }}/gui-screenshots
+          if-no-files-found: error
+          retention-days: 7
       - name: Package
         if: matrix.package-os != ''
         shell: bash
