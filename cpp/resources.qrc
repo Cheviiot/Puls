@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/puls">
+    <file alias="Icon.png">../internal/gui/assets/Icon.png</file>
+  </qresource>
+</RCC>
