@@ -31,6 +31,18 @@ void expect(bool condition, const char* message) {
     std::cerr << "FAIL: " << message << '\n';
 }
 
+void expectWrappedHeight(QLabel* value, const char* message) {
+    const int required = value->heightForWidth(value->width());
+    if (value->height() < required)
+        std::cerr << "Wrapped label: " << value->objectName().toStdString()
+                  << ", window " << value->window()->width() << 'x' << value->window()->height()
+                  << ", width " << value->width() << ", height " << value->height()
+                  << ", required " << required << ", minimum " << value->minimumHeight()
+                  << ", font " << value->font().family().toStdString() << ' '
+                  << value->font().pixelSize() << "px, Qt " << qVersion() << '\n';
+    expect(value->height() >= required, message);
+}
+
 bool until(const std::function<bool()>& condition, int timeout = 1500) {
     QElapsedTimer elapsed;
     elapsed.start();
@@ -356,7 +368,7 @@ void assertControlsVisible(QWidget* window) {
            "parameter summary remains fully readable inside its clickable row");
     for (auto* value : window->findChildren<QLabel*>()) {
         if (!value->objectName().startsWith("result_")) continue;
-        expect(value->height() >= value->heightForWidth(value->width()), "metric values have enough height without shrinking the font");
+        expectWrappedHeight(value, "metric values have enough height without shrinking the font");
     }
     auto* scroll = control<QScrollArea>(window, "resultsScroll");
     if (scroll->widget()->width() > scroll->viewport()->width())
@@ -379,6 +391,7 @@ void testResponsiveErrorsAndThemes() {
     auto* themes = control<QComboBox>(window.get(), "themeChoice");
     for (int theme = 0; theme < themes->count(); ++theme) {
         themes->setCurrentIndex(theme);
+        int compactErrorHeight = 0;
         for (const auto& size : QList<QSize>{{360, 294}, {360, 640}, {900, 600}, {1280, 800}, {360, 294}}) {
             window->resize(size);
             settle();
@@ -387,8 +400,12 @@ void testResponsiveErrorsAndThemes() {
             for (const auto* name : {"error_yandex", "error_speedtest"}) {
                 auto* error = control<QLabel>(window.get(), name);
                 expect(error->isVisible() && error->wordWrap(), "long errors stay visible and wrap across themes and sizes");
-                expect(error->height() >= error->heightForWidth(error->width()), "long error label has enough height for its current width");
+                expectWrappedHeight(error, "long error label has enough height for its current width");
             }
+            const int errorHeight = control<QLabel>(window.get(), "error_yandex")->height();
+            if (size == QSize(360, 294) && compactErrorHeight == 0) compactErrorHeight = errorHeight;
+            if (size.width() >= 900)
+                expect(errorHeight < compactErrorHeight, "wider error text releases the preceding compact height constraint");
             auto* scroll = control<QScrollArea>(window.get(), "resultsScroll");
             scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
             settle();

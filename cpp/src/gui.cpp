@@ -573,6 +573,39 @@ private:
         });
     }
 
+    static void activateLayouts(QWidget* widget) {
+        if (auto* layout = widget->layout()) {
+            layout->invalidate();
+            layout->activate();
+        }
+        for (auto* child : widget->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
+            if (child->isVisible()) activateLayouts(child);
+    }
+
+    void measureWrappedLabels() {
+        // Qt 6.8 can retain a preceding width's rounded label height. Allocate
+        // widths first, then measure; repeat once if the scrollbar takes space.
+        for (int pass = 0; pass < 2; ++pass) {
+            const auto labels = pages_->currentWidget()->findChildren<QLabel*>();
+            for (auto* value : labels)
+                if (value->isVisible() && value->wordWrap()) value->setMinimumHeight(0);
+            if (pages_->currentWidget() == measure_) {
+                auto* content = resultsScroll_->widget();
+                content->resize(resultsScroll_->viewport()->width(), content->height());
+            }
+            activateLayouts(pages_->currentWidget());
+            for (auto* value : labels) {
+                if (!value->isVisible() || !value->wordWrap()) continue;
+                value->ensurePolished();
+                const int measured = value->heightForWidth(value->width());
+                if (measured >= 0) value->setMinimumHeight(measured);
+            }
+            activateLayouts(pages_->currentWidget());
+        }
+        if (pages_->currentWidget() == measure_)
+            resultsScroll_->widget()->updateGeometry();
+    }
+
     void adaptMetrics() {
         if (!resultsScroll_) return;
         wideMetrics_ = resultsScroll_->viewport()->width() >= 640;
@@ -594,6 +627,7 @@ private:
             rows.metrics->invalidate();
         }
         resultsScroll_->widget()->updateGeometry();
+        measureWrappedLabels();
     }
 
     void rebuildResults() {
@@ -706,6 +740,7 @@ private:
         )").arg(background.name(), foreground.name(), secondary.name(),
                  dark ? QStringLiteral("#ff938d") : QStringLiteral("#c01c28"), surface.name(), border.name(), accent.name(),
                  dark ? QStringLiteral("#303034") : QStringLiteral("#ededf1")));
+        queueAdapt();
     }
 
     void start() {
@@ -752,6 +787,7 @@ private:
             selector_->setEnabled(true);
             summaryButton_->setEnabled(true);
             progress_->hide();
+            queueAdapt();
             if (closePending_) close();
         });
         thread_->start();
@@ -762,6 +798,7 @@ private:
         cancellation_->cancel();
         status_->setText(QStringLiteral("Останавливаем проверку…"));
         action_->setEnabled(false);
+        queueAdapt();
     }
 
     void phaseResult(const QString& id, const QString& phase, const QJsonObject& result) {
@@ -781,6 +818,7 @@ private:
             rows.error->setText(message);
             rows.error->show();
         }
+        queueAdapt();
     }
 
     void serverResult(const QString& id, const QJsonObject& server) {
@@ -789,6 +827,7 @@ private:
         if (!server.value("city").toString().isEmpty()) text += QStringLiteral(" · ") + server.value("city").toString();
         if (!server.value("region").toString().isEmpty()) text += QStringLiteral(", ") + server.value("region").toString();
         rows_[id].server->setText(text);
+        queueAdapt();
     }
 
     void observe(const QJsonObject& event) {
@@ -803,6 +842,7 @@ private:
                 progress_->setRange(0, 3);
                 progress_->setValue(phase == "ping" ? 0 : phase == "download" ? 1 : 2);
             }
+            queueAdapt();
         } else if (kind == "server_selected") serverResult(id, event.value("server").toObject());
         else if (kind == "phase_completed") phaseResult(id, phase, event.value("phase_result").toObject());
     }
@@ -845,6 +885,7 @@ private:
                          status == "partial" ? QStringLiteral("Получен частичный результат") :
                          status == "canceled" ? QStringLiteral("Проверка остановлена") :
                                                 QStringLiteral("Не удалось выполнить проверку"));
+        queueAdapt();
     }
 };
 } // namespace
