@@ -1,0 +1,58 @@
+name: C++ migration
+
+on:
+  push:
+    branches: [main, 'codex/cpp-*']
+    paths: ['cpp/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png']
+  pull_request:
+    paths: ['cpp/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Qt C++ / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install Qt
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.8.3'
+          modules: qtwebsockets
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build/cpp -DCMAKE_BUILD_TYPE=Debug -DPULS_BUILD_GUI=ON
+      - name: Build
+        run: cmake --build build/cpp --config Debug --parallel 2
+      - name: Test contracts and CLI
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build/cpp -C Debug --output-on-failure --repeat until-fail:10
+
+  sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes qt6-base-dev qt6-websockets-dev
+      - name: Configure
+        run: cmake -S . -B build/asan -DCMAKE_BUILD_TYPE=Debug -DPULS_BUILD_GUI=OFF -DPULS_ENABLE_SANITIZERS=ON
+      - name: Build
+        run: cmake --build build/asan --parallel 2
+      - name: Test
+        run: ctest --test-dir build/asan --output-on-failure
