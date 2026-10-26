@@ -8,17 +8,21 @@
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QMetaObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QSet>
 #include <QTimer>
+#include <QThread>
 #include <QUrlQuery>
 #include <QWebSocket>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <vector>
 
 namespace puls {
@@ -568,17 +572,7 @@ public:
             }
             if (candidates.isEmpty()) fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("nearest_servers не вернул корректных адресов"), true);
             if (candidates.size() > 8) candidates = candidates.mid(0, 8);
-            QList<QmsServer> responsive;
-            for (auto candidate : candidates) {
-                requireActive(cancellation, QStringLiteral("select"));
-                if (remaining(15000) <= 0) break;
-                QList<double> samples;
-                if (probe(candidate.host, 10, cancellation, &samples, QStringLiteral("select"))) {
-                    candidate.samples = samples;
-                    candidate.median = median(samples);
-                    responsive.append(candidate);
-                }
-            }
+            QList<QmsServer> responsive = probeCandidates(candidates, cancellation);
             if (responsive.isEmpty()) fail(id(), QStringLiteral("select"), QStringLiteral("unavailable"), QStringLiteral("ни один найденный сервер QMS не завершил согласование WebSocket"), true);
             std::stable_sort(responsive.begin(), responsive.end(), [](const auto& a, const auto& b) { return a.median < b.median; });
             selected_ = responsive.first();
@@ -670,14 +664,19 @@ private:
         fail(id(), phase, QStringLiteral("unavailable"), QStringLiteral("пропускная способность ещё не перенесена в C++ backend"));
     }
     bool probe(const QString& host, int count, const Cancellation& cancellation, QList<double>* samples,
-               const QString& phase, QString* failureCode = nullptr) {
-        if (remaining(15000) <= 0) fail(id(), phase, QStringLiteral("timeout"), QStringLiteral("истекло время выполнения измерения"), true);
+               const QString& phase, QString* failureCode = nullptr,
+               const std::chrono::steady_clock::time_point* sharedDeadline = nullptr) {
+        const auto timeLeft = [&] {
+            if (!sharedDeadline) return remaining(15000);
+            return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(*sharedDeadline - std::chrono::steady_clock::now()).count());
+        };
+        if (timeLeft() <= 0) fail(id(), phase, QStringLiteral("timeout"), QStringLiteral("истекло время выполнения измерения"), true);
         QWebSocket socket;
         socket.setReadBufferSize(maxWebSocketMessage);
         socket.setMaxAllowedIncomingFrameSize(maxWebSocketMessage);
         socket.setMaxAllowedIncomingMessageSize(maxWebSocketMessage);
         QEventLoop loop; QTimer timer; timer.setInterval(10); QElapsedTimer deadline;
-        const int probeTimeout = std::min(8000, remaining(15000));
+        const int probeTimeout = std::min(8000, timeLeft());
         bool done = false, ok = false; QString failure; int state = 0, receivedPings = 0;
         QElapsedTimer pingClock;
         auto finishError = [&](const QString& message, const QString& code = QStringLiteral("protocol")) { if (done) return; failure = message; if (failureCode) *failureCode = code; done = true; socket.abort(); loop.quit(); };
@@ -719,7 +718,7 @@ private:
         QObject::connect(&socket, &QWebSocket::disconnected, &loop, [&] { if (!done) finishError(QStringLiteral("соединение WebSocket закрыто"), QStringLiteral("unavailable")); });
         QObject::connect(&timer, &QTimer::timeout, &loop, [&] {
             if (cancellation.canceled()) finishError(QStringLiteral("canceled"), QStringLiteral("canceled"));
-            else if (remaining(15000) <= 0 || deadline.elapsed() >= probeTimeout) finishError(QStringLiteral("timeout"), QStringLiteral("timeout"));
+            else if (timeLeft() <= 0 || deadline.elapsed() >= probeTimeout) finishError(QStringLiteral("timeout"), QStringLiteral("timeout"));
         });
         const QUrl hostUrl(QStringLiteral("//") + host);
         const QString scheme = options_.allowLoopbackHTTP && isLoopback(hostUrl.host()) ? QStringLiteral("ws://") : QStringLiteral("wss://");
@@ -728,6 +727,89 @@ private:
         deadline.start(); timer.start(); socket.open(request); loop.exec(); timer.stop(); socket.abort();
         if (failure == QStringLiteral("canceled")) fail(id(), phase, QStringLiteral("canceled"), QStringLiteral("операция отменена"));
         return ok;
+    }
+    QList<QmsServer> probeCandidates(const QList<QmsServer>& candidates, const Cancellation& cancellation) {
+        using Clock = std::chrono::steady_clock;
+        struct ProbeResult { QList<double> samples; bool responsive = false; QString code; };
+
+        const auto phaseLeft = remaining(15000);
+        if (phaseLeft <= 0) fail(id(), QStringLiteral("select"), QStringLiteral("timeout"), QStringLiteral("истекло время выполнения измерения"), true);
+        const auto started = Clock::now();
+        const auto probeDeadline = started + std::chrono::milliseconds(std::min(8000, phaseLeft));
+        std::vector<ProbeResult> results(static_cast<size_t>(candidates.size()));
+        std::vector<QThread*> threads;
+        threads.reserve(static_cast<size_t>(candidates.size()));
+        std::mutex resultsMutex;
+        QEventLoop dispatchLoop;
+        QTimer cancellationTimer;
+        cancellationTimer.setInterval(10);
+        qsizetype next = 0;
+        qsizetype active = 0;
+        bool canceled = false;
+
+        auto startNext = [&] {
+            if (cancellation.canceled()) canceled = true;
+            while (!canceled && next < candidates.size() && active < 4 &&
+                   Clock::now() < probeDeadline && remaining(15000) > 0) {
+                const qsizetype index = next++;
+                const QString host = candidates[index].host;
+                ++active;
+                QThread* thread = QThread::create([&, index, host, probeDeadline] {
+                    ProbeResult result;
+                    try {
+                        result.responsive = probe(host, 10, cancellation, &result.samples,
+                                                  QStringLiteral("select"), &result.code, &probeDeadline);
+                    } catch (const OpError& error) {
+                        result.code = error.code;
+                    } catch (...) {
+                        result.code = QStringLiteral("unavailable");
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(resultsMutex);
+                        results[static_cast<size_t>(index)] = std::move(result);
+                    }
+                    QMetaObject::invokeMethod(&dispatchLoop, [&, index] {
+                        --active;
+                        startNext();
+                        if ((canceled || next >= candidates.size() || Clock::now() >= probeDeadline || remaining(15000) <= 0) && active == 0)
+                            dispatchLoop.quit();
+                    }, Qt::QueuedConnection);
+                });
+                threads.push_back(thread);
+                thread->start();
+            }
+            if ((canceled || next >= candidates.size() || Clock::now() >= probeDeadline || remaining(15000) <= 0) && active == 0)
+                dispatchLoop.quit();
+        };
+        QObject::connect(&cancellationTimer, &QTimer::timeout, &dispatchLoop, [&] {
+            if (cancellation.canceled()) canceled = true;
+            if ((canceled || Clock::now() >= probeDeadline || remaining(15000) <= 0) && active == 0)
+                dispatchLoop.quit();
+        });
+        cancellationTimer.start();
+        startNext();
+        if (active > 0 || next < candidates.size()) dispatchLoop.exec();
+        cancellationTimer.stop();
+        for (QThread* thread : threads) {
+            thread->wait();
+            delete thread;
+        }
+        if (canceled || cancellation.canceled()) fail(id(), QStringLiteral("select"), QStringLiteral("canceled"), QStringLiteral("операция отменена"));
+
+        QList<QmsServer> responsive;
+        for (qsizetype i = 0; i < next; ++i) {
+            ProbeResult result;
+            {
+                std::lock_guard<std::mutex> lock(resultsMutex);
+                result = results[static_cast<size_t>(i)];
+            }
+            if (!result.responsive) continue;
+            auto candidate = candidates[i];
+            candidate.samples = std::move(result.samples);
+            candidate.median = median(candidate.samples);
+            responsive.append(std::move(candidate));
+        }
+        return responsive;
     }
     QString refreshKey(const Cancellation& cancellation, const QString& phase) {
         if (keyRefreshAttempted_) fail(id(), phase, QStringLiteral("auth"), QStringLiteral("browser key уже обновлялся"));
