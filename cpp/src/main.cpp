@@ -21,18 +21,19 @@
 #endif
 
 namespace {
-volatile std::sig_atomic_t interrupted = 0;
-void handleSignal(int) { interrupted = 1; }
+static_assert(std::atomic_bool::is_always_lock_free, "Signal handling requires lock-free atomic flags");
+std::atomic_bool interrupted{false};
+void handleSignal(int) { interrupted.store(true, std::memory_order_relaxed); }
 
 class SignalMonitor {
 public:
     explicit SignalMonitor(puls::Cancellation& cancellation) {
-        interrupted = 0;
+        interrupted.store(false);
         oldInterrupt_ = std::signal(SIGINT, handleSignal);
         oldTerminate_ = std::signal(SIGTERM, handleSignal);
         worker_ = std::thread([this, &cancellation] {
             while (!stopping_.load()) {
-                if (interrupted) cancellation.cancel();
+                if (interrupted.load()) cancellation.cancel();
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
         });
@@ -164,13 +165,13 @@ int main(int argc, char** argv) {
             errorOutput(config.json ? QStringLiteral("ошибка записи JSON\n") : QStringLiteral("ошибка записи результата\n"));
             return 1;
         }
-        if (cancellation.canceled() || interrupted) {
+        if (cancellation.canceled() || interrupted.load()) {
             errorOutput(QStringLiteral("операция прервана\n"));
             return 130;
         }
         return puls::exitCode(result);
     } catch (const std::exception& error) {
         errorOutput(QStringLiteral("ошибка: %1\n").arg(QString::fromUtf8(error.what())));
-        return cancellation.canceled() || interrupted ? 130 : 1;
+        return cancellation.canceled() || interrupted.load() ? 130 : 1;
     }
 }
