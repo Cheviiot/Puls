@@ -178,6 +178,8 @@ void clearPreferences() {
     preferences.sync();
 }
 
+void assertControlsVisible(QWidget* window);
+
 void testSuccessAndAffinity() {
     clearPreferences();
     const auto backend = state();
@@ -199,6 +201,11 @@ void testSuccessAndAffinity() {
     expect(control<QLabel>(window.get(), "statusLabel")->text() == QStringLiteral("Проверка завершена"), "success status reaches the GUI");
     expect(backend->created.load() == 1 && backend->wrongThread.load() == 0, "backend lifetime and calls stay in one non-GUI worker thread");
     expect(audit.wrongThread == 0, "widget event dispatch stays on the GUI thread");
+    for (const auto& size : QList<QSize>{{360, 294}, {360, 640}, {900, 600}, {1280, 800}, {360, 294}}) {
+        window->resize(size);
+        settle();
+        assertControlsVisible(window.get());
+    }
     window->close();
     settle();
 }
@@ -297,6 +304,7 @@ void testServiceNavigationAndDiscoveryProgress() {
     window->show();
     settle();
     control<QPushButton>(window.get(), "serviceSegment_2")->click();
+    settle();
     expect(control<QLabel>(window.get(), "result_speedtest_ping")->isVisible(), "inline both-services selector exposes both result panels");
     auto* summary = control<QPushButton>(window.get(), "summaryButton");
     summary->click();
@@ -339,7 +347,20 @@ void assertControlsVisible(QWidget* window) {
     expect(start->isVisible() && window->rect().contains(startRect), "start/stop control remains fully visible after resize");
     expect(menu->isVisible() && window->rect().contains(menuRect), "menu control remains fully visible after resize");
     expect(start->height() >= 44, "resizing preserves accessible action size");
+    auto* summaryButton = control<QPushButton>(window, "summaryButton");
+    auto* summary = control<QLabel>(window, "settingsSummary");
+    const QRect summaryRect(summary->mapTo(summaryButton, QPoint()), summary->size());
+    expect(summaryButton->rect().contains(summaryRect) && summary->height() >= summary->heightForWidth(summary->width()),
+           "parameter summary remains fully readable inside its clickable row");
+    for (auto* value : window->findChildren<QLabel*>()) {
+        if (!value->objectName().startsWith("result_")) continue;
+        expect(value->height() >= value->heightForWidth(value->width()), "metric values have enough height without shrinking the font");
+    }
     auto* scroll = control<QScrollArea>(window, "resultsScroll");
+    if (scroll->widget()->width() > scroll->viewport()->width())
+        std::cerr << "Layout extent: window " << window->width() << 'x' << window->height()
+                  << ", content " << scroll->widget()->width() << ", viewport " << scroll->viewport()->width()
+                  << ", content minimum " << scroll->widget()->minimumSizeHint().width() << '\n';
     expect(scroll->widget()->width() <= scroll->viewport()->width(), "result content fits available width without horizontal clipping");
 }
 

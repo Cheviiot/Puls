@@ -53,6 +53,24 @@ QLabel* label(const QString& text, QWidget* parent = nullptr) {
     return result;
 }
 
+class SummaryButton final : public QPushButton {
+public:
+    SummaryButton() {
+        auto policy = QSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        policy.setHeightForWidth(true);
+        setSizePolicy(policy);
+        setMinimumHeight(44);
+    }
+    QSize sizeHint() const override {
+        return layout() ? layout()->totalSizeHint().expandedTo(QSize(0, 44)) : QPushButton::sizeHint();
+    }
+    QSize minimumSizeHint() const override { return {0, 44}; }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override {
+        return layout() ? std::max(44, layout()->totalHeightForWidth(width)) : 44;
+    }
+};
+
 class Window final : public QMainWindow {
 public:
     Window(const Config& initial, BackendFactory factory)
@@ -269,11 +287,12 @@ private:
 
     QWidget* centered(QWidget* content) {
         auto* outer = new QWidget;
+        outer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         auto* layout = new QHBoxLayout(outer);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->addStretch();
         content->setMaximumWidth(760);
-        content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        content->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         layout->addWidget(content, 1);
         layout->addStretch();
         return outer;
@@ -337,7 +356,7 @@ private:
             segmented->addWidget(button, 1);
         }
         contentLayout->addWidget(selector_);
-        summaryButton_ = new QPushButton;
+        summaryButton_ = new SummaryButton;
         summaryButton_->setObjectName("summaryButton");
         summaryButton_->setProperty("summaryAction", true);
         auto* summaryLayout = new QHBoxLayout(summaryButton_);
