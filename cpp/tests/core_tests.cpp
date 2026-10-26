@@ -913,6 +913,36 @@ void testQmsLocalWebSocketHandshakeAndFailures() {
     }
 }
 
+void testYandexWebSocketTimeoutOverrideIsOptional() {
+    const QList<QJsonValue> values{QJsonValue(QJsonValue::Undefined), QJsonValue(QJsonValue::Null),
+                                  QJsonValue(2000), QJsonValue(0), QJsonValue(-1),
+                                  QJsonValue(30001), QJsonValue(1.5), QJsonValue("2000")};
+    for (const auto& value : values) {
+        QJsonObject payload;
+        LocalHttpServer server([&](const QByteArray&) {
+            return LocalHttpServer::Response{"200 OK", "application/json",
+                QJsonDocument(payload).toJson(QJsonDocument::Compact)};
+        });
+        payload = yandexDiscovery(server.baseUrl().toString());
+        auto upload = payload.value("upload").toObject();
+        auto probes = upload.value("probes").toArray();
+        auto item = probes.first().toObject();
+        QUrl socketUrl = server.baseUrl();
+        socketUrl.setScheme("ws");
+        item.insert("websocketUrl", socketUrl.toString());
+        item.insert("websocketConnectionTimeout", value);
+        probes[0] = item;
+        upload.insert("probes", probes);
+        payload.insert("upload", upload);
+        auto backend = puls::makeBackendForTesting("yandex", localBackendOptions(server.baseUrl()));
+        const puls::Cancellation cancellation;
+        const auto error = captureOpError([&] { (void)backend->select(measureConfig(), cancellation); });
+        const bool accepted = value.isUndefined() || value.isNull() || value == QJsonValue(2000);
+        expect(accepted ? !error.has_value() : error && error->code == "protocol",
+               "Yandex accepts omitted timeout overrides and validates supplied integer bounds");
+    }
+}
+
 void testCancellationHelper() {
     puls::Cancellation cancellation;
     puls::checkCanceled(cancellation, "ping");
@@ -957,6 +987,7 @@ int main(int argc, char** argv) {
     testDiscoveryAuthStatusClassificationAndKeyRefresh();
     testRealSocketCancellationClosesPendingDiscovery();
     testYandexCDNsCollectLatencyIndependently();
+    testYandexWebSocketTimeoutOverrideIsOptional();
     testQmsLocalWebSocketHandshakeAndFailures();
     if (failures != 0) {
         std::cerr << failures << " test assertion(s) failed\n";

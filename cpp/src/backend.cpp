@@ -335,7 +335,14 @@ public:
                 const QString ws = item.value("websocketUrl").toString();
                 if (!ws.isEmpty()) {
                     checkedUrl(ws, QStringLiteral("wss"), QStringLiteral("select"), options_.allowLoopbackHTTP);
-                    if (endpointHost(ws) != host || item.value("websocketConnectionTimeout").toInt() <= 0 || item.value("websocketConnectionTimeout").toInt() > 30000)
+                    // The official r21702543 frontend uses an optional timeout
+                    // override (n || O.connectionTimeout). Do not invent a
+                    // timeout value when discovery omits that override.
+                    const auto wsTimeout = item.value("websocketConnectionTimeout");
+                    const bool hasTimeout = !wsTimeout.isUndefined() && !wsTimeout.isNull();
+                    if (endpointHost(ws) != host || (hasTimeout &&
+                        (!wsTimeout.isDouble() || wsTimeout.toDouble() != std::floor(wsTimeout.toDouble()) ||
+                         wsTimeout.toDouble() <= 0 || wsTimeout.toDouble() > 30000)))
                         fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("неверная WebSocket upload-проба"), true);
                 }
                 const auto timeout = item.value("timeout");
