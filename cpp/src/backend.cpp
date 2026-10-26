@@ -18,6 +18,8 @@
 #include <QWebSocket>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <vector>
 
 namespace puls {
 namespace {
@@ -36,7 +38,10 @@ struct HttpResponse {
     QByteArray contentEncoding;
     QByteArray body;
     qint64 elapsedMs = 0;
-    QString networkError;
+    QNetworkReply::NetworkError networkError = QNetworkReply::NoError;
+    bool canceled = false;
+    bool timedOut = false;
+    bool oversized = false;
 };
 
 [[noreturn]] void fail(const QString& service, const QString& phase, const QString& code,
@@ -87,12 +92,15 @@ HttpResponse perform(QNetworkAccessManager& manager, QNetworkRequest request, qs
     timer.setInterval(10);
     QElapsedTimer elapsed;
     elapsed.start();
+    HttpResponse response;
     bool canceled = false;
     bool timedOut = false;
     bool oversized = false;
     QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
     QObject::connect(reply, &QIODevice::readyRead, &loop, [&] {
-        if (reply->bytesAvailable() > maxBytes) {
+        const auto chunk = reply->read(maxBytes + 1 - response.body.size());
+        response.body.append(chunk);
+        if (response.body.size() > maxBytes) {
             oversized = true;
             reply->abort();
         }
@@ -111,16 +119,16 @@ HttpResponse perform(QNetworkAccessManager& manager, QNetworkRequest request, qs
     timer.start();
     loop.exec();
     timer.stop();
-    HttpResponse response;
+    // The body is drained incrementally above to keep the reply buffer bounded.
     response.elapsedMs = elapsed.elapsed();
     response.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     response.contentType = reply->rawHeader("Content-Type");
     response.contentEncoding = reply->rawHeader("Content-Encoding");
-    response.body = reply->read(maxBytes + 1);
-    if (canceled) response.networkError = QStringLiteral("canceled");
-    else if (timedOut) response.networkError = QStringLiteral("timeout");
-    else if (oversized || response.body.size() > maxBytes) response.networkError = QStringLiteral("oversized");
-    else if (reply->error() != QNetworkReply::NoError) response.networkError = reply->errorString();
+    response.body.append(reply->read(maxBytes + 1 - response.body.size()));
+    response.canceled = canceled;
+    response.timedOut = timedOut;
+    response.oversized = oversized || response.body.size() > maxBytes;
+    response.networkError = reply->error();
     reply->deleteLater();
     return response;
 }
@@ -137,21 +145,22 @@ QJsonDocument parseJson(const QByteArray& data, const QString& service, const QS
 
 void ensureHttp(const HttpResponse& response, const QString& service, const QString& phase,
                 const QString& operation, const QString& expectedType, bool timeoutRetryable = true) {
-    if (!response.networkError.isEmpty()) {
-        const auto code = response.networkError == QStringLiteral("canceled") ? QStringLiteral("canceled") :
-                          response.networkError == QStringLiteral("timeout") ? QStringLiteral("timeout") :
-                          response.networkError == QStringLiteral("oversized") ? QStringLiteral("protocol") : QStringLiteral("unavailable");
-        fail(service, phase, code, operation + QStringLiteral(": сетевой запрос не завершён"), code == QStringLiteral("unavailable") || (code == QStringLiteral("timeout") && timeoutRetryable));
+    if (response.canceled) fail(service, phase, QStringLiteral("canceled"), operation + QStringLiteral(": операция отменена"));
+    if (response.timedOut) fail(service, phase, QStringLiteral("timeout"), operation + QStringLiteral(": истекло время ожидания"), timeoutRetryable);
+    if (response.oversized) fail(service, phase, QStringLiteral("protocol"), operation + QStringLiteral(": превышен безопасный размер ответа"));
+    if (response.status == 401 || response.status == 403) {
+        fail(service, phase, QStringLiteral("auth"), operation + QStringLiteral(": HTTP статус %1").arg(response.status), true);
     }
+    if (response.networkError == QNetworkReply::TimeoutError)
+        fail(service, phase, QStringLiteral("timeout"), operation + QStringLiteral(": истекло время ожидания"), timeoutRetryable);
     if (response.status < 200 || response.status >= 300) {
-        const bool authFailure = response.status == 401 || response.status == 403;
         const bool transientStatus = response.status == 408 || response.status == 429 || response.status >= 500;
-        const bool yandexDiscovery = service == QStringLiteral("yandex") && phase == QStringLiteral("select");
-        const QString code = authFailure && (service == QStringLiteral("speedtest") || phase == QStringLiteral("connection")) ? QStringLiteral("auth") :
-            transientStatus && !(yandexDiscovery && response.status < 500) ? QStringLiteral("unavailable") : QStringLiteral("protocol");
-        const bool retryable = code == QStringLiteral("auth") || code == QStringLiteral("unavailable") || (yandexDiscovery && transientStatus);
+        const QString code = transientStatus ? QStringLiteral("unavailable") : QStringLiteral("protocol");
+        const bool retryable = code == QStringLiteral("unavailable");
         fail(service, phase, code, operation + QStringLiteral(": HTTP статус %1").arg(response.status), retryable);
     }
+    if (response.networkError != QNetworkReply::NoError)
+        fail(service, phase, QStringLiteral("unavailable"), operation + QStringLiteral(": сетевой запрос не завершён"), true);
     const auto media = response.contentType.split(';').first().trimmed().toLower();
     if (media != expectedType.toLatin1().toLower())
         fail(service, phase, QStringLiteral("protocol"), operation + QStringLiteral(": неверный Content-Type"), service == QStringLiteral("yandex") && phase == QStringLiteral("select"));
@@ -200,6 +209,45 @@ double qmsJitter(const QList<double>& samples, double median) {
     return jitter;
 }
 
+QString normalizeHost(QString host) {
+    host = host.trimmed();
+    if (host.isEmpty() || host.contains(QRegularExpression(QStringLiteral("[/;?#@\\s]"))) || host.contains(QStringLiteral("://"))) return {};
+    QHostAddress address;
+    const QString unbracketed = host.startsWith('[') && host.endsWith(']') ? host.mid(1, host.size() - 2) : host;
+    if (address.setAddress(unbracketed)) return address.toString().contains(':') ? QStringLiteral("[%1]:20000").arg(address.toString()) : address.toString() + QStringLiteral(":20000");
+    QString hostname;
+    QString port = QStringLiteral("20000");
+    if (host.startsWith('[')) {
+        const auto close = host.indexOf(']');
+        if (close <= 1) return {};
+        hostname = host.mid(1, close - 1);
+        address.clear();
+        if (!address.setAddress(hostname) || address.protocol() != QAbstractSocket::IPv6Protocol) return {};
+        if (close + 1 < host.size()) {
+            if (host[close + 1] != ':') return {};
+            port = host.mid(close + 2);
+        }
+        hostname = address.toString();
+    } else {
+        const auto colon = host.lastIndexOf(':');
+        if (colon >= 0) {
+            hostname = host.left(colon);
+            port = host.mid(colon + 1);
+            if (hostname.contains(':')) return {};
+        } else hostname = host;
+    }
+    bool ok = false;
+    const int portNumber = port.toInt(&ok);
+    if (hostname.isEmpty() || !ok || portNumber < 1 || portNumber > 65535) return {};
+    return hostname.contains(':') ? QStringLiteral("[%1]:%2").arg(hostname).arg(portNumber) : hostname + QStringLiteral(":%1").arg(portNumber);
+}
+
+bool sameOrigin(const QUrl& a, const QUrl& b) {
+    const auto effectivePort = [](const QUrl& url) { return url.port(url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0 ? 443 : 80); };
+    return a.scheme().compare(b.scheme(), Qt::CaseInsensitive) == 0 &&
+        a.host().compare(b.host(), Qt::CaseInsensitive) == 0 && effectivePort(a) == effectivePort(b);
+}
+
 bool validIp(QString value, QString* normalized = nullptr) {
     QHostAddress address;
     if (!address.setAddress(value) || !address.scopeId().isEmpty()) return false;
@@ -215,8 +263,6 @@ bool validIp(QString value, QString* normalized = nullptr) {
     return false;
 }
 
-QJsonObject failed(const OpError& error) { return failedPhase(error); }
-
 struct YandexProbeSet {
     QStringList latency;
     QStringList download;
@@ -229,10 +275,11 @@ public:
     QString id() const override { return QStringLiteral("yandex"); }
 
     QJsonObject select(const Config&, const Cancellation& cancellation) override {
+        phaseClock_.start();
         try {
             requireActive(cancellation, QStringLiteral("select"));
             const auto probeUrl = options_.yandexBase.resolved(QUrl(QStringLiteral("/internet/api/v0/get-probes?flag_ws-conn-timeout=2000")));
-            const auto response = perform(manager_, requestFor(QUrl(cacheBust(probeUrl.toString()))), maxYandexDiscovery, 15000, cancellation, QStringLiteral("select"));
+            const auto response = perform(manager_, requestFor(QUrl(cacheBust(probeUrl.toString()))), maxYandexDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
             ensureHttp(response, id(), QStringLiteral("select"), QStringLiteral("get-probes"), QStringLiteral("application/json"));
             const auto doc = parseJson(response.body, id(), QStringLiteral("select"), QStringLiteral("get-probes"), maxYandexDiscovery);
             if (!doc.isObject()) fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("get-probes вернул не объект"), true);
@@ -299,86 +346,134 @@ public:
             probes_ = set;
             QJsonObject server{{"name", set.host}, {"city", QJsonValue::Null}, {"region", QJsonValue::Null}};
             return server;
-        } catch (const OpError& error) { throw; }
+        } catch (const OpError&) { throw; }
     }
 
     QJsonObject ping(const Config&, const Cancellation& cancellation) override {
-        try {
-            if (probes_.latency.isEmpty()) fail(id(), QStringLiteral("ping"), QStringLiteral("internal"), QStringLiteral("сначала выберите сервер"));
-            struct Sample { double ms; int index; };
-            QList<Sample> samples;
-            QString failureCode;
-            for (int round = 0; round < 4; ++round) {
-                requireActive(cancellation, QStringLiteral("ping"));
-                QList<QNetworkReply*> replies;
-                QList<QElapsedTimer*> clocks;
-                QEventLoop loop;
-                for (const auto& raw : probes_.latency) {
-                    auto* clock = new QElapsedTimer;
-                    clock->start();
-                    clocks.append(clock);
-                    auto* reply = manager_.get(requestFor(QUrl(cacheBust(raw)), "*/*"));
-                    replies.append(reply);
-                    QObject::connect(reply, &QNetworkReply::finished, &loop, [&] {
-                        for (auto* r : replies) if (!r->isFinished()) return;
-                        loop.quit();
-                    });
+        if (probes_.latency.isEmpty()) fail(id(), QStringLiteral("ping"), QStringLiteral("internal"), QStringLiteral("сначала выберите сервер"));
+        struct Worker {
+            int attempts = 0;
+            QNetworkReply* reply = nullptr;
+            QElapsedTimer clock;
+            qint64 headerNsecs = -1;
+            QByteArray body;
+            bool oversized = false;
+            bool timedOut = false;
+            int status = 0;
+            QNetworkReply::NetworkError error = QNetworkReply::NoError;
+            QList<double> samples;
+            QString lastFailure;
+        };
+        std::vector<Worker> workers(static_cast<size_t>(probes_.latency.size()));
+        QEventLoop loop;
+        QTimer timer;
+        timer.setInterval(10);
+        QElapsedTimer phaseDeadline;
+        phaseDeadline.start();
+        int completed = 0;
+        bool canceled = false;
+        bool phaseTimedOut = false;
+        std::function<void(int)> launch;
+        launch = [&](int index) {
+            auto& worker = workers[static_cast<size_t>(index)];
+            worker.headerNsecs = -1;
+            worker.body.clear();
+            worker.oversized = false;
+            worker.timedOut = false;
+            worker.status = 0;
+            worker.error = QNetworkReply::NoError;
+            worker.clock.start();
+            auto* reply = manager_.get(requestFor(QUrl(cacheBust(probes_.latency[index])), "*/*"));
+            worker.reply = reply;
+            reply->setReadBufferSize(maxPingBody + 1);
+            QObject::connect(reply, &QNetworkReply::metaDataChanged, &loop, [&, index] {
+                auto& current = workers[static_cast<size_t>(index)];
+                if (current.headerNsecs < 0) current.headerNsecs = current.clock.nsecsElapsed();
+            });
+            QObject::connect(reply, &QIODevice::readyRead, &loop, [&, index] {
+                auto& current = workers[static_cast<size_t>(index)];
+                current.body.append(reply->read(maxPingBody + 1 - current.body.size()));
+                if (current.body.size() > maxPingBody) {
+                    current.oversized = true;
+                    reply->abort();
                 }
-                QTimer timer; timer.setInterval(10);
-                QElapsedTimer deadline; deadline.start();
-                QObject::connect(&timer, &QTimer::timeout, &loop, [&] {
-                    if (cancellation.canceled() || deadline.elapsed() >= 5000) {
-                        for (auto* reply : replies) reply->abort();
-                        loop.quit();
-                    }
-                });
-                timer.start(); loop.exec(); timer.stop();
-                if (cancellation.canceled()) {
-                    for (int i=0;i<replies.size();++i) { replies[i]->deleteLater(); delete clocks[i]; }
-                    fail(id(), QStringLiteral("ping"), QStringLiteral("canceled"), QStringLiteral("операция отменена"));
-                }
-                for (int i = 0; i < replies.size(); ++i) {
-                    auto* reply = replies[i];
-                    const auto body = reply->read(maxPingBody + 1);
-                    const auto encoding = reply->rawHeader("Content-Encoding").trimmed().toLower();
-                    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-                    if (status >= 200 && status < 300 && reply->error() == QNetworkReply::NoError && body.size() <= maxPingBody && (encoding.isEmpty() || encoding == QByteArrayLiteral("identity"))) {
-                        const double ms = static_cast<double>(clocks[i]->nsecsElapsed()) / 1'000'000.0;
-                        samples.append({ms, i});
-                    } else if ((status == 401 || status == 403) && failureCode.isEmpty()) {
-                        failureCode = QStringLiteral("auth");
-                    } else if (status > 0 && status < 500 && status != 408 && status != 429 && body.size() <= maxPingBody) {
-                        if (failureCode.isEmpty()) failureCode = QStringLiteral("protocol");
-                    } else if (reply->error() == QNetworkReply::TimeoutError) {
-                        if (failureCode.isEmpty()) failureCode = QStringLiteral("timeout");
-                    }
-                    reply->deleteLater(); delete clocks[i];
+            });
+            QObject::connect(reply, &QNetworkReply::finished, &loop, [&, index, reply] {
+                auto& current = workers[static_cast<size_t>(index)];
+                current.body.append(reply->read(maxPingBody + 1 - current.body.size()));
+                current.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                current.error = reply->error();
+                const auto encoding = reply->rawHeader("Content-Encoding").trimmed().toLower();
+                const bool valid = !current.timedOut && !current.oversized && current.status >= 200 && current.status < 300 &&
+                    current.error == QNetworkReply::NoError && current.headerNsecs >= 0 && current.body.size() <= maxPingBody &&
+                    (encoding.isEmpty() || encoding == QByteArrayLiteral("identity"));
+                if (valid) current.samples.append(static_cast<double>(current.headerNsecs) / 1'000'000.0);
+                else if (current.oversized || (!encoding.isEmpty() && encoding != QByteArrayLiteral("identity"))) current.lastFailure = QStringLiteral("protocol");
+                else if (current.status == 401 || current.status == 403) current.lastFailure = QStringLiteral("auth");
+                else if (current.timedOut || current.error == QNetworkReply::TimeoutError) current.lastFailure = QStringLiteral("timeout");
+                else if (current.status > 0 && current.status < 500 && current.status != 408 && current.status != 429) current.lastFailure = QStringLiteral("protocol");
+                else current.lastFailure = QStringLiteral("unavailable");
+                current.reply = nullptr;
+                reply->deleteLater();
+                ++current.attempts;
+                if (!canceled && !phaseTimedOut && !cancellation.canceled() && current.attempts < 4) launch(index);
+                else if (++completed == static_cast<int>(workers.size())) loop.quit();
+            });
+        };
+        QObject::connect(&timer, &QTimer::timeout, &loop, [&] {
+            if (cancellation.canceled()) {
+                canceled = true;
+                for (auto& worker : workers) if (worker.reply) worker.reply->abort();
+                return;
+            }
+            if (phaseDeadline.elapsed() >= 15000) {
+                phaseTimedOut = true;
+                for (auto& worker : workers) if (worker.reply) { worker.timedOut = true; worker.reply->abort(); }
+                return;
+            }
+            for (auto& worker : workers) {
+                if (worker.reply && worker.clock.elapsed() >= 5000) {
+                    worker.timedOut = true;
+                    worker.reply->abort();
                 }
             }
-            if (samples.isEmpty()) {
-                if (failureCode.isEmpty()) failureCode = QStringLiteral("unavailable");
-                fail(id(), QStringLiteral("ping"), failureCode, QStringLiteral("все запросы задержки завершились с ошибкой"), failureCode != QStringLiteral("protocol"));
-            }
-            QList<double> values;
-            int bestIndex = samples.first().index;
-            double best = samples.first().ms;
-            for (const auto& sample : samples) { values.append(sample.ms); if (sample.ms < best) { best = sample.ms; bestIndex = sample.index; } }
-            auto phase = pingPhase(values, QStringLiteral("minimum"), true);
-            QList<double> winningSamples;
-            for (const auto& sample : samples) if (sample.index == bestIndex) winningSamples.append(sample.ms);
-            if (winningSamples.size() > 1) winningSamples.removeFirst();
-            phase.insert(QStringLiteral("jitter_ms"), medianAbsoluteDeviation(winningSamples));
-            return phase;
-        } catch (const OpError& error) { return failed(error); }
+        });
+        requireActive(cancellation, QStringLiteral("ping"));
+        for (int i = 0; i < static_cast<int>(workers.size()); ++i) launch(i);
+        timer.start();
+        loop.exec();
+        timer.stop();
+        for (auto& worker : workers) if (worker.reply) { worker.reply->abort(); worker.reply->deleteLater(); }
+        if (canceled || cancellation.canceled()) fail(id(), QStringLiteral("ping"), QStringLiteral("canceled"), QStringLiteral("операция отменена"));
+        if (phaseTimedOut) fail(id(), QStringLiteral("ping"), QStringLiteral("timeout"), QStringLiteral("истекло время выполнения ping"), true);
+        QList<double> values;
+        int bestIndex = -1;
+        double best = std::numeric_limits<double>::infinity();
+        QString failureCode = QStringLiteral("unavailable");
+        for (int i = 0; i < static_cast<int>(workers.size()); ++i) {
+            const auto& worker = workers[static_cast<size_t>(i)];
+            values.append(worker.samples);
+            for (const auto value : worker.samples) if (value < best) { best = value; bestIndex = i; }
+            if (worker.lastFailure == QStringLiteral("auth")) failureCode = QStringLiteral("auth");
+            else if (failureCode != QStringLiteral("auth") && worker.lastFailure == QStringLiteral("protocol")) failureCode = QStringLiteral("protocol");
+            else if (failureCode != QStringLiteral("auth") && failureCode != QStringLiteral("protocol") && worker.lastFailure == QStringLiteral("timeout")) failureCode = QStringLiteral("timeout");
+        }
+        if (values.isEmpty()) fail(id(), QStringLiteral("ping"), failureCode, QStringLiteral("все запросы задержки завершились с ошибкой"), failureCode == QStringLiteral("auth") || failureCode == QStringLiteral("timeout") || failureCode == QStringLiteral("unavailable"));
+        auto phase = pingPhase(values, QStringLiteral("minimum"), true);
+        auto winningSamples = workers[static_cast<size_t>(bestIndex)].samples;
+        if (winningSamples.size() > 1) winningSamples.removeFirst();
+        phase.insert(QStringLiteral("jitter_ms"), medianAbsoluteDeviation(winningSamples));
+        return phase;
     }
 
-    QJsonObject download(const Config&, const Cancellation&) override { return unavailable(QStringLiteral("download")); }
-    QJsonObject upload(const Config&, const Cancellation&) override { return unavailable(QStringLiteral("upload")); }
+    QJsonObject download(const Config&, const Cancellation&) override { unavailable(QStringLiteral("download")); }
+    QJsonObject upload(const Config&, const Cancellation&) override { unavailable(QStringLiteral("upload")); }
 
     QJsonObject connection(const Cancellation& cancellation) override {
         try {
+            phaseClock_.start();
             const auto pageUrl = options_.yandexBase.resolved(QUrl(QStringLiteral("/internet/")));
-            const auto response = perform(manager_, requestFor(pageUrl, "text/html"), maxYandexPage, 15000, cancellation, QStringLiteral("connection"));
+            const auto response = perform(manager_, requestFor(pageUrl, "text/html"), maxYandexPage, remaining(15000), cancellation, QStringLiteral("connection"));
             ensureHttp(response, id(), QStringLiteral("connection"), QStringLiteral("страница интернетометра"), QStringLiteral("text/html"));
             const QByteArray marker = "Client.default(";
             int start = response.body.indexOf(marker);
@@ -399,18 +494,19 @@ public:
             if (!validIp(ip.value("v4").toString(), &parsed) && !validIp(ip.value("v6").toString(), &parsed))
                 fail(id(), QStringLiteral("connection"), QStringLiteral("protocol"), QStringLiteral("страница не сообщила действительный IP-адрес"));
             return QJsonObject{{"status", "ok"}, {"external_ip", parsed}, {"isp", QJsonValue::Null}, {"detected_by", id()}, {"warnings", QJsonArray{}}, {"error", QJsonValue::Null}};
-        } catch (const OpError& error) {
-            return QJsonObject{{"status", "error"}, {"external_ip", QJsonValue::Null}, {"isp", QJsonValue::Null}, {"detected_by", id()}, {"warnings", QJsonArray{}}, {"error", error.json()}};
+        } catch (const OpError&) {
+            throw;
         }
     }
 private:
-    QJsonObject unavailable(const QString& phase) {
-        OpError error(QStringLiteral("unavailable"), phase, QStringLiteral("пропускная способность ещё не перенесена в C++ backend"));
-        return failed(error);
+    int remaining(int requested) const { return std::max(1, requested - static_cast<int>(phaseClock_.elapsed())); }
+    [[noreturn]] void unavailable(const QString& phase) {
+        fail(id(), phase, QStringLiteral("unavailable"), QStringLiteral("пропускная способность ещё не перенесена в C++ backend"));
     }
     QNetworkAccessManager manager_;
     BackendOptions options_;
     YandexProbeSet probes_;
+    QElapsedTimer phaseClock_;
 };
 
 struct QmsServer { QString host, name, city, region; double median = 0; QList<double> samples; };
@@ -421,11 +517,11 @@ public:
     QString id() const override { return QStringLiteral("speedtest"); }
     QJsonObject select(const Config& config, const Cancellation& cancellation) override {
         try {
+            phaseClock_.start();
             requireActive(cancellation, QStringLiteral("select"));
             if (!config.server.isEmpty()) {
-                QString host = config.server.trimmed();
-                if (host.contains(QRegularExpression(QStringLiteral("[/;?#@]"))) || host.contains(QStringLiteral("://"))) fail(id(), QStringLiteral("select"), QStringLiteral("internal"), QStringLiteral("неверный адрес сервера"));
-                if (!host.contains(':')) host += QStringLiteral(":20000");
+                const QString host = normalizeHost(config.server);
+                if (host.isEmpty()) fail(id(), QStringLiteral("select"), QStringLiteral("internal"), QStringLiteral("неверный адрес сервера"));
                 const QUrl parsed(QStringLiteral("wss://") + host + QStringLiteral("/"), QUrl::StrictMode);
                 if (!parsed.isValid() || parsed.host().isEmpty() || parsed.port(-1) < 1 || parsed.port(-1) > 65535 || !parsed.userInfo().isEmpty())
                     fail(id(), QStringLiteral("select"), QStringLiteral("internal"), QStringLiteral("неверный адрес сервера"));
@@ -436,12 +532,12 @@ public:
             auto key = browserKey_;
             auto request = requestFor(url);
             request.setRawHeader("x-api-key", key.toUtf8());
-            auto response = perform(manager_, request, maxSpeedDiscovery, 15000, cancellation, QStringLiteral("select"));
+            auto response = perform(manager_, request, maxSpeedDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
             if (response.status == 401 || response.status == 403) {
                 key = refreshKey(cancellation, QStringLiteral("select"));
                 request = requestFor(url);
                 request.setRawHeader("x-api-key", key.toUtf8());
-                response = perform(manager_, request, maxSpeedDiscovery, 15000, cancellation, QStringLiteral("select"));
+                response = perform(manager_, request, maxSpeedDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
             }
             ensureHttp(response, id(), QStringLiteral("select"), QStringLiteral("nearest_servers"), QStringLiteral("application/json"));
             const auto doc = parseJson(response.body, id(), QStringLiteral("select"), QStringLiteral("nearest_servers"), maxSpeedDiscovery);
@@ -457,7 +553,8 @@ public:
                 const int serverId = row.value("id").toInt();
                 const QString name = row.value("name").toString().trimmed(), city = row.value("city").toString().trimmed(), source = row.value("source").toString().trimmed();
                 if (!src.isValid() || src.host().isEmpty() || !checkedSourceAllowed(src) || !src.userInfo().isEmpty() || !src.query().isEmpty() || !src.fragment().isEmpty() || (!src.path().isEmpty() && src.path() != QStringLiteral("/")) || serverId <= 0 || name.isEmpty() || city.isEmpty() || source.isEmpty() || port < 1 || port > 65535) continue;
-                const QString host = src.host() + QStringLiteral(":%1").arg(port);
+                const QString sourceHost = src.host();
+                const QString host = (sourceHost.contains(':') ? QStringLiteral("[%1]").arg(sourceHost) : sourceHost) + QStringLiteral(":%1").arg(port);
                 if (seen.contains(host)) continue;
                 seen.insert(host); candidates.append({host, name, city, row.value("region_name").toString(), 0, {}});
             }
@@ -466,6 +563,7 @@ public:
             QList<QmsServer> responsive;
             for (auto candidate : candidates) {
                 requireActive(cancellation, QStringLiteral("select"));
+                if (remaining(15000) <= 0) break;
                 QList<double> samples;
                 if (probe(candidate.host, 10, cancellation, &samples, QStringLiteral("select"))) {
                     candidate.samples = samples;
@@ -481,6 +579,7 @@ public:
         } catch (const OpError&) { throw; }
     }
     QJsonObject ping(const Config&, const Cancellation& cancellation) override {
+        phaseClock_.start();
         try {
             if (selected_.host.isEmpty()) fail(id(), QStringLiteral("ping"), QStringLiteral("internal"), QStringLiteral("сначала выберите сервер"));
             QList<QmsServer> ordered{selected_};
@@ -507,17 +606,18 @@ public:
                 if (!failureCode.isEmpty()) lastCode = failureCode;
             }
             fail(id(), QStringLiteral("ping"), lastCode, QStringLiteral("QMS ping завершился с ошибкой"), lastCode != QStringLiteral("canceled") && lastCode != QStringLiteral("protocol"));
-        } catch (const OpError& error) { return failed(error); }
+        } catch (const OpError&) { throw; }
     }
-    QJsonObject download(const Config&, const Cancellation&) override { return unavailable(QStringLiteral("download")); }
-    QJsonObject upload(const Config&, const Cancellation&) override { return unavailable(QStringLiteral("upload")); }
+    QJsonObject download(const Config&, const Cancellation&) override { unavailable(QStringLiteral("download")); }
+    QJsonObject upload(const Config&, const Cancellation&) override { unavailable(QStringLiteral("upload")); }
     QJsonObject connection(const Cancellation& cancellation) override {
         try {
+            phaseClock_.start();
             QString key = browserKey_;
             auto fetch = [&](const QString& path, const QString& currentKey) {
                 auto req = requestFor(options_.speedtestBase.resolved(QUrl(path + QStringLiteral("?t=") + QString::number(QDateTime::currentMSecsSinceEpoch()))));
                 req.setRawHeader("x-api-key", currentKey.toUtf8());
-                return perform(manager_, req, maxJSONConnection, 15000, cancellation, QStringLiteral("connection"));
+                return perform(manager_, req, maxJSONConnection, remaining(15000), cancellation, QStringLiteral("connection"));
             };
             auto response = fetch(QStringLiteral("/api/asn_provider/ip"), key);
             if (response.status == 401 || response.status == 403) { key = refreshKey(cancellation, QStringLiteral("connection")); response = fetch(QStringLiteral("/api/asn_provider/ip"), key); }
@@ -540,31 +640,34 @@ public:
                     isp = value.value("provider_name").toString().trimmed();
                     if (isp.size() > 255 || isp.contains(QRegularExpression(QStringLiteral("[\\r\\n\\x00]")))) isp.clear();
                 }
-            } catch (const OpError&) {
+            } catch (const OpError& error) {
+                if (error.code == QStringLiteral("canceled") || error.code == QStringLiteral("timeout") || remaining(15000) <= 0) throw;
                 // Provider metadata is best effort; a valid IP remains usable.
             }
             if (isp.isEmpty()) warnings.append(QStringLiteral("speedtest.ru не сообщил корректное название интернет-провайдера"));
             return QJsonObject{{"status", "ok"}, {"external_ip", ip}, {"isp", isp.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(isp)}, {"detected_by", id()}, {"warnings", warnings}, {"error", QJsonValue::Null}};
-        } catch (const OpError& error) {
-            return QJsonObject{{"status", "error"}, {"external_ip", QJsonValue::Null}, {"isp", QJsonValue::Null}, {"detected_by", id()}, {"warnings", QJsonArray{}}, {"error", error.json()}};
+        } catch (const OpError&) {
+            throw;
         }
     }
 private:
+    int remaining(int requested) const { return phaseClock_.isValid() ? requested - static_cast<int>(phaseClock_.elapsed()) : requested; }
     static double median(QList<double> values) {
         return medianOf(std::move(values));
     }
     static QJsonObject serverJson(const QmsServer& server) {
         return {{"name", server.host}, {"city", server.city.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(server.city)}, {"region", server.region.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(server.region)}};
     }
-    QJsonObject unavailable(const QString& phase) {
-        OpError error(QStringLiteral("unavailable"), phase, QStringLiteral("пропускная способность ещё не перенесена в C++ backend"));
-        return failed(error);
+    [[noreturn]] void unavailable(const QString& phase) {
+        fail(id(), phase, QStringLiteral("unavailable"), QStringLiteral("пропускная способность ещё не перенесена в C++ backend"));
     }
     bool probe(const QString& host, int count, const Cancellation& cancellation, QList<double>* samples,
                const QString& phase, QString* failureCode = nullptr) {
+        if (remaining(15000) <= 0) fail(id(), phase, QStringLiteral("timeout"), QStringLiteral("истекло время выполнения измерения"), true);
         QWebSocket socket;
         socket.setReadBufferSize(maxWebSocketMessage);
         QEventLoop loop; QTimer timer; timer.setInterval(10); QElapsedTimer deadline;
+        const int probeTimeout = std::min(8000, remaining(8000));
         bool done = false, ok = false; QString failure; int state = 0, receivedPings = 0;
         QElapsedTimer pingClock;
         auto finishError = [&](const QString& message, const QString& code = QStringLiteral("protocol")) { if (done) return; failure = message; if (failureCode) *failureCode = code; done = true; socket.abort(); loop.quit(); };
@@ -603,9 +706,10 @@ private:
         });
         QObject::connect(&socket, &QWebSocket::binaryMessageReceived, &loop, [&](const QByteArray&) { finishError(QStringLiteral("неожиданный binary кадр QMS")); });
         QObject::connect(&socket, &QWebSocket::errorOccurred, &loop, [&](QAbstractSocket::SocketError) { finishError(QStringLiteral("ошибка WebSocket QMS"), QStringLiteral("unavailable")); });
+        QObject::connect(&socket, &QWebSocket::disconnected, &loop, [&] { if (!done) finishError(QStringLiteral("соединение WebSocket закрыто"), QStringLiteral("unavailable")); });
         QObject::connect(&timer, &QTimer::timeout, &loop, [&] {
             if (cancellation.canceled()) finishError(QStringLiteral("canceled"), QStringLiteral("canceled"));
-            else if (deadline.elapsed() >= 8000) finishError(QStringLiteral("timeout"), QStringLiteral("timeout"));
+            else if (remaining(15000) <= 0 || deadline.elapsed() >= probeTimeout) finishError(QStringLiteral("timeout"), QStringLiteral("timeout"));
         });
         const QUrl hostUrl(QStringLiteral("//") + host);
         const QString scheme = options_.allowLoopbackHTTP && isLoopback(hostUrl.host()) ? QStringLiteral("ws://") : QStringLiteral("wss://");
@@ -616,7 +720,9 @@ private:
         return ok;
     }
     QString refreshKey(const Cancellation& cancellation, const QString& phase) {
-        auto page = perform(manager_, requestFor(options_.speedtestBase, "text/html"), maxYandexPage, 15000, cancellation, phase);
+        if (keyRefreshAttempted_) fail(id(), phase, QStringLiteral("auth"), QStringLiteral("browser key уже обновлялся"));
+        keyRefreshAttempted_ = true;
+        auto page = perform(manager_, requestFor(options_.speedtestBase, "text/html"), maxYandexPage, remaining(15000), cancellation, phase);
         ensureHttp(page, id(), phase, QStringLiteral("страница speedtest.ru"), QStringLiteral("text/html"));
         const QRegularExpression assets(QStringLiteral("src=[\\\"']([^\\\"']+\\.js[^\\\"']*)[\\\"']"));
         const auto matches = assets.globalMatch(QString::fromUtf8(page.body));
@@ -627,10 +733,12 @@ private:
         while (it.hasNext() && count++ < 32) {
             const auto match = it.next();
             const auto url = origin.resolved(QUrl(match.captured(1)));
-            if (url.scheme() != origin.scheme() || url.host() != origin.host()) continue;
-            auto asset = perform(manager_, requestFor(url, "*/*"), maxYandexPage, 10000, cancellation, phase);
+            if (!sameOrigin(origin, url)) continue;
+            auto asset = perform(manager_, requestFor(url, "*/*"), maxYandexPage, remaining(10000), cancellation, phase);
             const auto media = asset.contentType.split(';').first().trimmed().toLower();
-            if (asset.status < 200 || asset.status >= 300 || asset.networkError.size() ||
+            const auto encoding = asset.contentEncoding.trimmed().toLower();
+            if (asset.status < 200 || asset.status >= 300 || asset.canceled || asset.timedOut || asset.oversized || asset.networkError != QNetworkReply::NoError ||
+                (!encoding.isEmpty() && encoding != QByteArrayLiteral("identity")) ||
                 (media != QByteArrayLiteral("application/javascript") && media != QByteArrayLiteral("text/javascript") && media != QByteArrayLiteral("text/plain"))) continue;
             const auto found = keyPattern.match(QString::fromUtf8(asset.body));
             if (found.hasMatch()) { browserKey_ = found.captured(1); return browserKey_; }
@@ -644,8 +752,10 @@ private:
     QNetworkAccessManager manager_;
     BackendOptions options_;
     QString browserKey_ = QString::fromLatin1(browserKey);
+    bool keyRefreshAttempted_ = false;
     QmsServer selected_;
     QList<QmsServer> candidates_;
+    QElapsedTimer phaseClock_;
 };
 } // namespace
 
