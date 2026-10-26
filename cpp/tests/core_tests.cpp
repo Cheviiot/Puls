@@ -156,6 +156,8 @@ struct BackendState {
     bool failPing = false;
     bool failConnection = false;
     bool blockPingUntilCanceled = false;
+    QJsonArray downloadWarnings;
+    QJsonArray uploadWarnings;
     std::atomic_int selectCalls{0};
     std::atomic_int pingCalls{0};
     std::atomic_int downloadCalls{0};
@@ -198,6 +200,7 @@ public:
         result.insert("elapsed_ms", 1000.0);
         result.insert("successful_streams", 2);
         result.insert("failed_streams", 0);
+        result.insert("warnings", state_->downloadWarnings);
         return result;
     }
 
@@ -209,6 +212,7 @@ public:
         result.insert("elapsed_ms", 1000.0);
         result.insert("successful_streams", 1);
         result.insert("failed_streams", 0);
+        result.insert("warnings", state_->uploadWarnings);
         return result;
     }
 
@@ -408,6 +412,57 @@ void testRunnerPreCanceledAndMidflightCancellation() {
         expect(envelope.value("status") == "canceled", "midflight cancellation is represented");
         expect(elapsed < std::chrono::seconds(1), "midflight cancellation completes within one second");
     }
+}
+
+void testRunnerMarksOnlyRequestedPhasesCanceled() {
+    const auto runCanceledPing = [](QString only) {
+        StateMap states;
+        auto state = stateFor(states, "yandex");
+        state->blockPingUntilCanceled = true;
+        const auto runner = runnerFor(states);
+        const auto config = measureConfig("yandex", std::move(only));
+        puls::Cancellation cancellation;
+        QJsonObject envelope;
+        std::thread worker([&] { envelope = runner.run(config, cancellation); });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (!state->pingStarted.load() && std::chrono::steady_clock::now() < deadline)
+            QThread::msleep(2);
+        const bool enteredPing = state->pingStarted.load();
+        cancellation.cancel();
+        worker.join();
+        expect(enteredPing, "requested ping entered before cancellation");
+        expect(envelope.value("status") == "canceled", "canceled requested ping cancels envelope");
+        return resultAt(envelope).value("phases").toObject();
+    };
+
+    const auto allPhases = runCanceledPing("all");
+    for (const auto* name : {"ping", "download", "upload"})
+        expect(allPhases.value(name).toObject().value("status") == "canceled",
+               "active and remaining requested phases report canceled");
+
+    const auto pingOnly = runCanceledPing("ping");
+    expect(pingOnly.value("ping").toObject().value("status") == "canceled",
+           "requested ping reports cancellation");
+    expect(pingOnly.value("download").toObject().value("status") == "skipped" &&
+               pingOnly.value("upload").toObject().value("status") == "skipped",
+           "unrequested throughput phases remain skipped after cancellation");
+}
+
+void testRunnerAggregatesUniquePhaseWarnings() {
+    StateMap states;
+    auto state = stateFor(states, "yandex");
+    state->downloadWarnings = QJsonArray{"shared warning", "download warning"};
+    state->uploadWarnings = QJsonArray{"shared warning", "upload warning"};
+    const puls::Cancellation cancellation;
+    const auto envelope = runnerFor(states).run(measureConfig("yandex", "all"), cancellation);
+    const auto result = resultAt(envelope);
+    const auto warnings = result.value("warnings").toArray();
+    expect(warnings == QJsonArray{"shared warning", "download warning", "upload warning"},
+           "measurement warnings merge phase warnings once in first-seen order");
+    const auto phases = result.value("phases").toObject();
+    expect(phases.value("download").toObject().value("warnings").toArray().size() == 2 &&
+               phases.value("upload").toObject().value("warnings").toArray().size() == 2,
+           "phase warnings remain present in their phase results");
 }
 
 class LocalHttpServer final : public QTcpServer {
@@ -648,6 +703,56 @@ void testSpeedtestConnectionUsesIPThenOptionalASNEndpoints() {
     expect(ipRequests == 1 && asnRequests == 1, "speedtest calls IP before optional ASN once");
 }
 
+void testSpeedtestRejectsISPOver255UTF8BytesButKeepsIP() {
+    const QString oversizedISP(128, QChar(0x044F)); // 128 Cyrillic characters = 256 UTF-8 bytes.
+    expect(oversizedISP.toUtf8().size() > 255 && oversizedISP.size() <= 255,
+           "ISP fixture exceeds the byte limit without exceeding the character limit");
+    const auto asnBody = QJsonDocument(QJsonObject{
+        {"ip", "203.0.113.21"}, {"provider_name", oversizedISP}}).toJson(QJsonDocument::Compact);
+    LocalHttpServer server([&](const QByteArray& requestLine) {
+        if (requestLine.startsWith("GET /api/asn_provider/ip?"))
+            return LocalHttpServer::Response{"200 OK", "application/json", "{\"ip\":\"203.0.113.21\"}"};
+        if (requestLine.startsWith("GET /api/asn_provider/asn?"))
+            return LocalHttpServer::Response{"200 OK", "application/json", asnBody};
+        return LocalHttpServer::Response{"404 Not Found", "application/json", "{}"};
+    });
+    auto backend = puls::makeBackendForTesting("speedtest", localBackendOptions(server.baseUrl()));
+    const puls::Cancellation cancellation;
+    const auto connection = backend->connection(cancellation);
+    expect(connection.value("status") == "ok" && connection.value("external_ip") == "203.0.113.21",
+           "oversized ISP metadata does not invalidate successful IP detection");
+    expect(connection.value("isp").isNull(), "ISP exceeding 255 UTF-8 bytes is omitted");
+    expect(connection.value("warnings").toArray().size() == 1,
+           "omitted oversized ISP metadata produces a connection warning");
+}
+
+void testSpeedtestSelectsFasterLaterQmsServer() {
+    QList<int> slowDelays, fastDelays;
+    for (int i = 0; i < 10; ++i) { slowDelays.append(50); fastDelays.append(1); }
+    QmsMockServer slower(QmsMockServer::Mode::Valid, slowDelays);
+    QmsMockServer faster(QmsMockServer::Mode::Valid, fastDelays);
+    LocalHttpServer server([&](const QByteArray& requestLine) {
+        if (!requestLine.startsWith("GET /api/nearest_servers?"))
+            return LocalHttpServer::Response{"404 Not Found", "application/json", "{}"};
+        const QJsonObject slow{
+            {"id", 1}, {"src", "http://127.0.0.1"}, {"port", slower.port()},
+            {"name", "slower"}, {"city", "Slow City"}, {"region_name", "Slow Region"}, {"source", "mock"}};
+        const QJsonObject fast{
+            {"id", 2}, {"src", "http://127.0.0.1"}, {"port", faster.port()},
+            {"name", "faster"}, {"city", "Fast City"}, {"region_name", "Fast Region"}, {"source", "mock"}};
+        const auto body = QJsonDocument(QJsonObject{
+            {"algorithm", "mock"}, {"data", QJsonArray{slow, fast}}}).toJson(QJsonDocument::Compact);
+        return LocalHttpServer::Response{"200 OK", "application/json", body};
+    });
+    auto backend = puls::makeBackendForTesting("speedtest", localBackendOptions(server.baseUrl()));
+    const puls::Cancellation cancellation;
+    const auto selected = backend->select(measureConfig("speedtest", "ping"), cancellation);
+    expect(selected.value("name") == QStringLiteral("127.0.0.1:%1").arg(faster.port()),
+           "speedtest ranks a later, faster QMS server ahead of the first slower server");
+    expect(slower.pingCount() == 10 && faster.pingCount() == 10,
+           "ranking samples each candidate with ten QMS pings");
+}
+
 void testDiscoveryRejectsWrongContentTypeAndOversizedBody() {
     const std::vector<std::pair<LocalHttpServer::Response, bool>> cases{
         {{"200 OK", "text/plain", "{}"}, true},
@@ -838,10 +943,14 @@ int main(int argc, char** argv) {
     testIPDefaultFallbackAndExplicitServiceScope();
     testRunnerRunsOnlyRequestedPhase();
     testRunnerPreCanceledAndMidflightCancellation();
+    testRunnerMarksOnlyRequestedPhasesCanceled();
+    testRunnerAggregatesUniquePhaseWarnings();
     testYandexBackendDiscoversAgainstLoopbackMock();
     testYandexDiscoveryRejectsExternalInsecureProbeURL();
     testYandexConnectionParsesBoundedBootstrapIP();
     testSpeedtestConnectionUsesIPThenOptionalASNEndpoints();
+    testSpeedtestRejectsISPOver255UTF8BytesButKeepsIP();
+    testSpeedtestSelectsFasterLaterQmsServer();
     testDiscoveryRejectsWrongContentTypeAndOversizedBody();
     testDiscoveryAuthStatusClassificationAndKeyRefresh();
     testRealSocketCancellationClosesPendingDiscovery();
