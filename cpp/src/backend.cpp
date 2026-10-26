@@ -747,7 +747,8 @@ private:
         qsizetype active = 0;
         bool canceled = false;
 
-        auto startNext = [&] {
+        std::function<void()> startNext;
+        startNext = [&] {
             if (cancellation.canceled()) canceled = true;
             while (!canceled && next < candidates.size() && active < 4 &&
                    Clock::now() < probeDeadline && remaining(15000) > 0) {

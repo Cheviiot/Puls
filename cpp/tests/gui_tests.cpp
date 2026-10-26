@@ -173,7 +173,8 @@ std::shared_ptr<State> state() {
 }
 
 void clearPreferences() {
-    QSettings preferences("Puls", "Puls");
+    QSettings preferences(QSettings::IniFormat, QSettings::UserScope, "Puls", "Puls");
+    preferences.setFallbacksEnabled(false);
     preferences.clear();
     preferences.sync();
 }
@@ -284,7 +285,8 @@ void testPrivatePreferences() {
     window->resize(900, 600);
     window->close();
     settle();
-    QSettings preferences("Puls", "Puls");
+    QSettings preferences(QSettings::IniFormat, QSettings::UserScope, "Puls", "Puls");
+    preferences.setFallbacksEnabled(false);
     preferences.sync();
     const QStringList allowed{"theme", "service", "profile", "duration", "connections", "phase", "windowSize"};
     const auto keys = preferences.allKeys();

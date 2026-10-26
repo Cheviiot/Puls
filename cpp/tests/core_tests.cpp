@@ -832,9 +832,10 @@ void testRealSocketCancellationClosesPendingDiscovery() {
 void testYandexCDNsCollectLatencyIndependently() {
     std::atomic_int fastSamples{0};
     std::atomic_int slowSamples{0};
+    quint16 listeningPort = 0;
     LocalHttpServer server([&](const QByteArray& requestLine) {
         if (requestLine.startsWith("GET /internet/api/v0/get-probes?")) {
-            const auto port = server.serverPort();
+            const auto port = listeningPort;
             const QString fast = QStringLiteral("http://127.0.0.1:%1/fast").arg(port);
             const QString slow = QStringLiteral("http://localhost:%1/slow").arg(port);
             QJsonObject discovery{
@@ -860,6 +861,7 @@ void testYandexCDNsCollectLatencyIndependently() {
         }
         return LocalHttpServer::Response{"404 Not Found", "application/json", "{}"};
     });
+    listeningPort = server.serverPort();
     auto backend = puls::makeBackendForTesting("yandex", localBackendOptions(server.baseUrl()));
     const puls::Cancellation cancellation;
     (void)backend->select(measureConfig(), cancellation);

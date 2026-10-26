@@ -11,7 +11,10 @@
 - Одно ядро `puls_core` и один `Runner` для CLI и GUI. Сетевые объекты создаются
   и уничтожаются в потоке вызова; GUI получает копии событий через очередь Qt.
 - Qt заменяет Fyne в новой C++-реализации по прямому запросу пользователя о
-  полном переносе. Внешний вид сохраняет направление Adwaita, без GTK runtime.
+  полном переносе. По уточнению «новый GUI с нуля» интерфейс проектируется
+  заново: выбор сервиса на главном экране, адаптивные карточки показателей,
+  отдельные настройки и закреплённая кнопка запуска/остановки. GTK runtime
+  не требуется.
 - Целевые платформы: Linux amd64/arm64, Windows amd64/arm64, macOS amd64/arm64,
   Android. Наличие CMake-конфигурации не означает проверенный выпуск на платформе.
 - Публичные команды, ограничения flags, русский human output и JSON schema 1
@@ -51,7 +54,8 @@ podman exec --user 1000 --workdir "$PWD" aeonlc-build \
 На системе с установленным Qt достаточно тех же трёх команд CMake/CTest без
 `podman exec`. Для CLI-only используйте `-DPULS_BUILD_GUI=OFF`. Windows
 собирается MSVC с UTF-8, macOS — Clang. Android требует Qt Android kit,
-официальный SDK/NDK и соответствующий Qt toolchain; APK пока не публикуется.
+официальный SDK/NDK, Qt 6.8+ и соответствующий Qt toolchain; APK пока не
+публикуется. Для sanitizers в Fedora нужны `libasan` и `libubsan`.
 
 ```sh
 build/cpp-debug/puls help

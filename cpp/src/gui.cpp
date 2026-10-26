@@ -234,7 +234,8 @@ private:
     bool wideMetrics_ = false;
 
     void load(const Config& initial) {
-        QSettings preferences("Puls", "Puls");
+        QSettings preferences(QSettings::IniFormat, QSettings::UserScope, "Puls", "Puls");
+        preferences.setFallbacksEnabled(false);
         config_ = initial;
         if (config_.service.isEmpty()) {
             config_.service = preferences.value("service", "yandex").toString();
@@ -259,7 +260,8 @@ private:
 
     void saveOptions() {
         if (!qEnvironmentVariableIsEmpty("PULS_GUI_PREVIEW_DIR")) return;
-        QSettings preferences("Puls", "Puls");
+        QSettings preferences(QSettings::IniFormat, QSettings::UserScope, "Puls", "Puls");
+        preferences.setFallbacksEnabled(false);
         preferences.setValue("theme", theme_);
         preferences.setValue("service", config_.service);
         preferences.setValue("profile", config_.profile);
@@ -271,7 +273,8 @@ private:
     void saveSize() {
         if (!qEnvironmentVariableIsEmpty("PULS_GUI_PREVIEW_DIR")) return;
         if (!isMaximized() && !isFullScreen()) {
-            QSettings preferences("Puls", "Puls");
+            QSettings preferences(QSettings::IniFormat, QSettings::UserScope, "Puls", "Puls");
+            preferences.setFallbacksEnabled(false);
             preferences.setValue("windowSize", size());
         }
     }
