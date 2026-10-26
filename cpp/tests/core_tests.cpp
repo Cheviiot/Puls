@@ -8,6 +8,9 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
+#include <QTimer>
+#include <QWebSocket>
+#include <QWebSocketServer>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -16,6 +19,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -412,6 +416,8 @@ public:
         QByteArray status;
         QByteArray contentType;
         QByteArray body;
+        int delayMs = 0;
+        bool holdOpen = false;
     };
     using Handler = std::function<Response(const QByteArray&)>;
 
@@ -427,12 +433,19 @@ public:
                     if (!request->contains("\r\n\r\n")) return;
                     const auto firstLine = request->left(request->indexOf("\r\n"));
                     const auto response = handler_(firstLine);
+                    if (response.holdOpen) return;
                     const auto& body = response.body;
-                    QByteArray bytes = "HTTP/1.1 " + response.status + "\r\nContent-Type: " +
+                    auto bytes = QByteArray("HTTP/1.1 ") + response.status + "\r\nContent-Type: " +
                         response.contentType + "\r\nContent-Length: " + QByteArray::number(body.size()) +
                         "\r\nConnection: close\r\n\r\n" + body;
-                    socket->write(bytes);
-                    socket->disconnectFromHost();
+                    auto send = [socket, bytes = std::move(bytes)] {
+                        if (socket->state() == QAbstractSocket::ConnectedState) {
+                            socket->write(bytes);
+                            socket->disconnectFromHost();
+                        }
+                    };
+                    if (response.delayMs > 0) QTimer::singleShot(response.delayMs, socket, std::move(send));
+                    else send();
                 });
             }
         });
@@ -445,6 +458,83 @@ public:
 private:
     Handler handler_;
 };
+
+class QmsMockServer final {
+public:
+    enum class Mode { Valid, MalformedText, Binary, EarlyDisconnect };
+
+    QmsMockServer(Mode mode, QList<int> pingDelays = {})
+        : server_(QStringLiteral("Puls QMS test"), QWebSocketServer::NonSecureMode),
+          mode_(mode), pingDelays_(std::move(pingDelays)) {
+        if (!server_.listen(QHostAddress::LocalHost, 0))
+            throw std::runtime_error("could not start loopback QMS test server");
+        QObject::connect(&server_, &QWebSocketServer::newConnection, &server_, [this] {
+            while (server_.hasPendingConnections()) {
+                auto* socket = server_.nextPendingConnection();
+                QObject::connect(socket, &QWebSocket::textMessageReceived, socket, [this, socket](const QString& message) {
+                    if (message == "HI") socket->sendTextMessage("HELLO");
+                    else if (message == "GETINFO") socket->sendTextMessage("qms_testing");
+                    else if (message == "AUTH") socket->sendTextMessage("READY_TO_TEST");
+                    else if (message == "PING") respondToPing(socket);
+                });
+            }
+        });
+    }
+
+    quint16 port() const { return server_.serverPort(); }
+    int pingCount() const { return pingCount_; }
+
+private:
+    void respondToPing(QWebSocket* socket) {
+        const int ping = pingCount_++;
+        if (mode_ == Mode::MalformedText) {
+            socket->sendTextMessage("PONG -1");
+            return;
+        }
+        if (mode_ == Mode::Binary) {
+            socket->sendBinaryMessage("PONG 1");
+            return;
+        }
+        if (mode_ == Mode::EarlyDisconnect) {
+            socket->abort();
+            return;
+        }
+        const int delay = ping < pingDelays_.size() ? pingDelays_[ping] : 0;
+        QTimer::singleShot(delay, socket, [socket, ping] {
+            if (socket->state() == QAbstractSocket::ConnectedState)
+                socket->sendTextMessage(QStringLiteral("PONG %1").arg(ping + 1));
+        });
+    }
+
+    QWebSocketServer server_;
+    Mode mode_;
+    QList<int> pingDelays_;
+    int pingCount_ = 0;
+};
+
+struct OperationError {
+    QString code;
+    QString phase;
+    bool retryable = false;
+};
+
+template <typename Fn>
+std::optional<OperationError> captureOpError(Fn&& operation) {
+    try {
+        operation();
+    } catch (const puls::OpError& error) {
+        return OperationError{error.code, error.phase, error.retryable};
+    }
+    return std::nullopt;
+}
+
+puls::BackendOptions localBackendOptions(const QUrl& base) {
+    puls::BackendOptions options;
+    options.yandexBase = base;
+    options.speedtestBase = base;
+    options.allowLoopbackHTTP = true;
+    return options;
+}
 
 QJsonObject yandexDiscovery(const QString& origin, bool externalLatency = false) {
     const auto latency = (externalLatency ? QStringLiteral("http://example.com/internet/ping")
@@ -557,6 +647,164 @@ void testSpeedtestConnectionUsesIPThenOptionalASNEndpoints() {
     expect(ipRequests == 1 && asnRequests == 1, "speedtest calls IP before optional ASN once");
 }
 
+void testDiscoveryRejectsWrongContentTypeAndOversizedBody() {
+    const std::vector<std::pair<LocalHttpServer::Response, bool>> cases{
+        {{"200 OK", "text/plain", "{}"}, true},
+        {{"200 OK", "application/json", QByteArray(2 * 1024 * 1024 + 1, 'x')}, false},
+    };
+    for (const auto& [response, retryable] : cases) {
+        LocalHttpServer server([&](const QByteArray&) { return response; });
+        auto backend = puls::makeBackendForTesting("yandex", localBackendOptions(server.baseUrl()));
+        const puls::Cancellation cancellation;
+        const auto error = captureOpError([&] { (void)backend->select(measureConfig(), cancellation); });
+        expect(error.has_value(), "invalid Yandex discovery response throws typed error");
+        if (error) {
+            expect(error->code == "protocol" && error->phase == "select",
+                   "invalid Yandex discovery response is classified as protocol/select");
+            expect(error->retryable == retryable, "Yandex discovery retry classification matches Go semantics");
+        }
+    }
+}
+
+void testDiscoveryAuthStatusClassificationAndKeyRefresh() {
+    for (const auto status : {QByteArray("401 Unauthorized"), QByteArray("403 Forbidden")}) {
+        int apiRequests = 0, pageRequests = 0, bundleRequests = 0;
+        LocalHttpServer server([&](const QByteArray& requestLine) {
+            if (requestLine.startsWith("GET /api/asn_provider/ip?")) {
+                ++apiRequests;
+                return LocalHttpServer::Response{status, "application/json", "{}"};
+            }
+            if (requestLine.startsWith("GET / ")) {
+                ++pageRequests;
+                return LocalHttpServer::Response{"200 OK", "text/html", "<script src=\"/bundle.js\"></script>"};
+            }
+            if (requestLine.startsWith("GET /bundle.js")) {
+                ++bundleRequests;
+                return LocalHttpServer::Response{"200 OK", "application/javascript", "QMSLibrary({id:'0123456789abcdef'});"};
+            }
+            return LocalHttpServer::Response{"404 Not Found", "application/json", "{}"};
+        });
+        auto backend = puls::makeBackendForTesting("speedtest", localBackendOptions(server.baseUrl()));
+        const puls::Cancellation cancellation;
+        const auto error = captureOpError([&] { (void)backend->connection(cancellation); });
+        expect(error.has_value(), "persistent speedtest authorization error throws typed error");
+        if (error) {
+            expect(error->code == "auth" && error->phase == "connection",
+                   "401 and 403 are classified as auth/connection");
+            expect(error->retryable, "HTTP auth errors preserve Go retryable classification");
+        }
+        expect(apiRequests == 2 && pageRequests == 1 && bundleRequests == 1,
+               "speedtest refreshes browser key once and retries the original request once");
+    }
+}
+
+void testRealSocketCancellationClosesPendingDiscovery() {
+    std::atomic_bool requestSeen{false};
+    LocalHttpServer server([&](const QByteArray&) {
+        requestSeen.store(true);
+        return LocalHttpServer::Response{"200 OK", "application/json", {}, 0, true};
+    });
+    auto backend = puls::makeBackendForTesting("yandex", localBackendOptions(server.baseUrl()));
+    puls::Cancellation cancellation;
+    std::chrono::steady_clock::time_point cancellationRequestedAt;
+    std::thread canceler([&] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!requestSeen.load() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        cancellationRequestedAt = std::chrono::steady_clock::now();
+        cancellation.cancel();
+    });
+    const auto error = captureOpError([&] { (void)backend->select(measureConfig(), cancellation); });
+    canceler.join();
+    expect(requestSeen.load(), "cancellation test reached a real pending loopback HTTP request");
+    expect(error && error->code == "canceled" && error->phase == "select",
+           "pending loopback HTTP request reports typed cancellation");
+    expect(std::chrono::steady_clock::now() - cancellationRequestedAt < std::chrono::seconds(1),
+           "pending HTTP request closes within one second after cancellation");
+}
+
+void testYandexCDNsCollectLatencyIndependently() {
+    std::atomic_int fastSamples{0};
+    std::atomic_int slowSamples{0};
+    LocalHttpServer server([&](const QByteArray& requestLine) {
+        if (requestLine.startsWith("GET /internet/api/v0/get-probes?")) {
+            const auto port = server.serverPort();
+            const QString fast = QStringLiteral("http://127.0.0.1:%1/fast").arg(port);
+            const QString slow = QStringLiteral("http://localhost:%1/slow").arg(port);
+            QJsonObject discovery{
+                {"mid", "local-test"},
+                {"latency", QJsonObject{{"probes", QJsonArray{
+                    QJsonObject{{"url", fast + "/ping"}}, QJsonObject{{"url", slow + "/ping"}}}}}},
+                {"download", QJsonObject{{"probes", QJsonArray{
+                    QJsonObject{{"url", fast + "/internet/probes/50mb"}, {"timeout", 0}},
+                    QJsonObject{{"url", slow + "/internet/probes/50mb"}, {"timeout", 0}}}}}},
+                {"upload", QJsonObject{{"probes", QJsonArray{
+                    QJsonObject{{"url", fast + "/internet/upload"}, {"postUrl", fast + "/internet/post"}, {"statsUrl", fast + "/internet/stats"}, {"size", 1024}, {"timeout", 0}},
+                    QJsonObject{{"url", slow + "/internet/upload"}, {"postUrl", slow + "/internet/post"}, {"statsUrl", slow + "/internet/stats"}, {"size", 1024}, {"timeout", 0}}}}}}
+            };
+            return LocalHttpServer::Response{"200 OK", "application/json", QJsonDocument(discovery).toJson(QJsonDocument::Compact)};
+        }
+        if (requestLine.startsWith("GET /fast/ping")) {
+            const int index = fastSamples.fetch_add(1);
+            return LocalHttpServer::Response{"200 OK", "text/plain", "ok", 20 + index * 20};
+        }
+        if (requestLine.startsWith("GET /slow/ping")) {
+            slowSamples.fetch_add(1);
+            return LocalHttpServer::Response{"200 OK", "text/plain", "ok", 250};
+        }
+        return LocalHttpServer::Response{"404 Not Found", "application/json", "{}"};
+    });
+    auto backend = puls::makeBackendForTesting("yandex", localBackendOptions(server.baseUrl()));
+    const puls::Cancellation cancellation;
+    (void)backend->select(measureConfig(), cancellation);
+    const auto phase = backend->ping(measureConfig(), cancellation);
+    expect(fastSamples.load() == 4 && slowSamples.load() == 4,
+           "Yandex samples both CDN latency probes four times");
+    expect(phase.value("samples").toInt() == 8, "Yandex reports all valid samples across CDNs");
+    expect(phase.value("value_ms").toDouble() < 150.0,
+           "fast CDN RTT is measured independently of slower CDN response delay");
+    expect(phase.value("jitter_ms").toDouble() < 100.0,
+           "Yandex jitter uses only the winning CDN samples");
+}
+
+void testQmsLocalWebSocketHandshakeAndFailures() {
+    {
+        QmsMockServer server(QmsMockServer::Mode::Valid);
+        auto backend = puls::makeBackendForTesting("speedtest", localBackendOptions(QUrl("http://127.0.0.1")));
+        auto config = measureConfig("speedtest", "ping");
+        config.server = QStringLiteral("127.0.0.1:%1").arg(server.port());
+        const puls::Cancellation cancellation;
+        (void)backend->select(config, cancellation);
+        const auto phase = backend->ping(config, cancellation);
+        expect(phase.value("status") == "ok" && phase.value("samples").toInt() == 10,
+               "QMS local WebSocket completes valid ten-PONG handshake");
+        expect(server.pingCount() == 10, "QMS sends exactly ten ping commands");
+        expect(phase.value("method") == "median", "QMS ping uses median as the primary statistic");
+    }
+    for (const auto mode : {QmsMockServer::Mode::MalformedText, QmsMockServer::Mode::Binary}) {
+        QmsMockServer server(mode);
+        auto backend = puls::makeBackendForTesting("speedtest", localBackendOptions(QUrl("http://127.0.0.1")));
+        auto config = measureConfig("speedtest", "ping");
+        config.server = QStringLiteral("127.0.0.1:%1").arg(server.port());
+        const puls::Cancellation cancellation;
+        (void)backend->select(config, cancellation);
+        const auto error = captureOpError([&] { (void)backend->ping(config, cancellation); });
+        expect(error && error->code == "protocol" && !error->retryable,
+               "malformed text and binary QMS frames are non-retryable protocol errors");
+    }
+    {
+        QmsMockServer server(QmsMockServer::Mode::EarlyDisconnect);
+        auto backend = puls::makeBackendForTesting("speedtest", localBackendOptions(QUrl("http://127.0.0.1")));
+        auto config = measureConfig("speedtest", "ping");
+        config.server = QStringLiteral("127.0.0.1:%1").arg(server.port());
+        const puls::Cancellation cancellation;
+        (void)backend->select(config, cancellation);
+        const auto error = captureOpError([&] { (void)backend->ping(config, cancellation); });
+        expect(error && error->code == "unavailable" && error->retryable,
+               "early QMS disconnect is a retryable transport error");
+    }
+}
+
 void testCancellationHelper() {
     puls::Cancellation cancellation;
     puls::checkCanceled(cancellation, "ping");
@@ -593,6 +841,11 @@ int main(int argc, char** argv) {
     testYandexDiscoveryRejectsExternalInsecureProbeURL();
     testYandexConnectionParsesBoundedBootstrapIP();
     testSpeedtestConnectionUsesIPThenOptionalASNEndpoints();
+    testDiscoveryRejectsWrongContentTypeAndOversizedBody();
+    testDiscoveryAuthStatusClassificationAndKeyRefresh();
+    testRealSocketCancellationClosesPendingDiscovery();
+    testYandexCDNsCollectLatencyIndependently();
+    testQmsLocalWebSocketHandshakeAndFailures();
     if (failures != 0) {
         std::cerr << failures << " test assertion(s) failed\n";
         return 1;
