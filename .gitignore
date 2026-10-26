@@ -1,4 +1,7 @@
 /dist/
+/.scratch/
+/build/
+/build-*/
 /puls
 /puls.exe
 *.apk
