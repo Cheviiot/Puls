@@ -7,7 +7,7 @@
 
 ## Принятые решения
 
-- C++20, CMake 3.21+, Qt 6.4+ с Core, Network, WebSockets и Widgets.
+- C++20, CMake 3.21+, Qt 6.5+ с Core, Network, WebSockets и Widgets.
 - Одно ядро `puls_core` и один `Runner` для CLI и GUI. Сетевые объекты создаются
   и уничтожаются в потоке вызова; GUI получает копии событий через очередь Qt.
 - Qt заменяет Fyne в новой C++-реализации по прямому запросу пользователя о

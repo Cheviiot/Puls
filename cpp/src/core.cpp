@@ -110,6 +110,17 @@ QJsonObject internalError(const QString& phase) {
     return failedPhase(OpError("internal", phase, QStringLiteral("внутренняя ошибка измерения")));
 }
 
+OpError reportedError(const QJsonObject& value, const QString& phase) {
+    const auto detail = value.value("error").toObject();
+    QString code = detail.value("code").toString();
+    if (value.value("status") == "canceled") code = "canceled";
+    if (!QStringList{"unavailable", "timeout", "protocol", "auth", "canceled", "internal"}.contains(code))
+        code = "protocol";
+    auto message = detail.value("message").toString();
+    if (message.isEmpty()) message = QStringLiteral("сервис не вернул допустимый результат");
+    return OpError(code, phase, message, detail.value("retryable").toBool());
+}
+
 QJsonObject retry(const Cancellation& cancellation, const QString& phase,
                   const std::function<QJsonObject()>& operation) {
     for (int attempt = 0; ; ++attempt) {
@@ -169,7 +180,9 @@ QJsonObject Runner::run(const Config& config, const Cancellation& cancellation, 
                 if (!backend) throw OpError("internal", "connection", QStringLiteral("сервис недоступен"));
                 auto connection = backend->connection(cancellation);
                 QHostAddress address(connection.value("external_ip").toString());
-                if (connection.value("status") != "ok" || address.isNull())
+                if (connection.value("status") != "ok")
+                    throw reportedError(connection, "connection");
+                if (address.isNull() || !address.scopeId().isEmpty())
                     throw OpError("protocol", "connection", QStringLiteral("сервис не вернул действительный IP-адрес"));
                 for (const auto* field : {"external_ip", "isp"}) {
                     auto value = connection.value(field);
@@ -243,9 +256,7 @@ QJsonObject Runner::run(const Config& config, const Cancellation& cancellation, 
                         const auto measured = value.value(phase == "ping" ? "value_ms" : "mbps");
                         if (!measured.isDouble() || !std::isfinite(measured.toDouble()) || measured.toDouble() < 0)
                             throw OpError("protocol", phase, QStringLiteral("сервис не вернул допустимый результат"));
-                    } else if (value.value("status") != "error" && value.value("status") != "canceled") {
-                        throw OpError("protocol", phase, QStringLiteral("неверное состояние измерения"));
-                    }
+                    } else throw reportedError(value, phase);
                 } catch (const OpError& error) { value = failedPhase(error); }
                   catch (const std::exception&) { value = internalError(phase); }
                 phases.insert(phase, value);

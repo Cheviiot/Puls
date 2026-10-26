@@ -46,10 +46,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes qt6-base-dev qt6-websockets-dev
+      - name: Install Qt
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.8.3'
+          modules: qtwebsockets
+          cache: true
       - name: Configure
         run: cmake -S . -B build/asan -DCMAKE_BUILD_TYPE=Debug -DPULS_BUILD_GUI=OFF -DPULS_ENABLE_SANITIZERS=ON
       - name: Build
