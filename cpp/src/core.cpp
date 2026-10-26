@@ -243,11 +243,14 @@ QJsonObject Runner::run(const Config& config, const Cancellation& cancellation, 
           catch (const std::exception&) { phases.insert("select", internalError("select")); }
         emitEvent("phase_completed", {{"service", id}, {"phase", "select"}, {"phase_result", phases.value("select")}});
         if (phases.value("select").toObject().value("status") == "ok") {
+            bool phaseCanceled = false;
             for (const QString& phase : {QString("ping"), QString("download"), QString("upload")}) {
                 if (config.only != "all" && config.only != phase) continue;
                 emitEvent("phase_started", {{"service", id}, {"phase", phase}});
                 QJsonObject value;
                 try {
+                    if (phaseCanceled)
+                        throw OpError("canceled", phase, QStringLiteral("операция отменена"));
                     checkCanceled(cancellation, phase);
                     if (phase == "ping") value = retry(cancellation, phase, [&] { return backend->ping(config, cancellation); });
                     else if (phase == "download") value = backend->download(config, cancellation);
@@ -260,8 +263,13 @@ QJsonObject Runner::run(const Config& config, const Cancellation& cancellation, 
                 } catch (const OpError& error) { value = failedPhase(error); }
                   catch (const std::exception&) { value = internalError(phase); }
                 phases.insert(phase, value);
+                auto warnings = result.value("warnings").toArray();
+                for (const auto& warning : value.value("warnings").toArray())
+                    if (warning.isString() && !warning.toString().isEmpty() && !warnings.contains(warning))
+                        warnings.append(warning);
+                result.insert("warnings", warnings);
                 emitEvent("phase_completed", {{"service", id}, {"phase", phase}, {"phase_result", value}});
-                if (cancellation.canceled() || value.value("status") == "canceled") break;
+                phaseCanceled = cancellation.canceled() || value.value("status") == "canceled";
             }
         }
         for (const auto* phase : {"select", "ping", "download", "upload"}) {

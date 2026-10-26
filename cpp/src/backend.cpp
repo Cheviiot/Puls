@@ -147,12 +147,14 @@ void ensureHttp(const HttpResponse& response, const QString& service, const QStr
                 const QString& operation, const QString& expectedType, bool timeoutRetryable = true) {
     if (response.canceled) fail(service, phase, QStringLiteral("canceled"), operation + QStringLiteral(": операция отменена"));
     if (response.timedOut) fail(service, phase, QStringLiteral("timeout"), operation + QStringLiteral(": истекло время ожидания"), timeoutRetryable);
-    if (response.oversized) fail(service, phase, QStringLiteral("protocol"), operation + QStringLiteral(": превышен безопасный размер ответа"));
+    if (response.oversized) fail(service, phase, QStringLiteral("protocol"), operation + QStringLiteral(": превышен безопасный размер ответа"), service == QStringLiteral("yandex") && phase == QStringLiteral("select"));
     if (response.status == 401 || response.status == 403) {
         fail(service, phase, QStringLiteral("auth"), operation + QStringLiteral(": HTTP статус %1").arg(response.status), true);
     }
     if (response.networkError == QNetworkReply::TimeoutError)
         fail(service, phase, QStringLiteral("timeout"), operation + QStringLiteral(": истекло время ожидания"), timeoutRetryable);
+    if (response.status == 0 && response.networkError != QNetworkReply::NoError)
+        fail(service, phase, QStringLiteral("unavailable"), operation + QStringLiteral(": сетевой запрос не завершён"), true);
     if (response.status < 200 || response.status >= 300) {
         const bool transientStatus = response.status == 408 || response.status == 429 || response.status >= 500;
         const QString code = transientStatus ? QStringLiteral("unavailable") : QStringLiteral("protocol");
@@ -390,7 +392,7 @@ public:
                 auto& current = workers[static_cast<size_t>(index)];
                 if (current.headerNsecs < 0) current.headerNsecs = current.clock.nsecsElapsed();
             });
-            QObject::connect(reply, &QIODevice::readyRead, &loop, [&, index] {
+            QObject::connect(reply, &QIODevice::readyRead, &loop, [&, index, reply] {
                 auto& current = workers[static_cast<size_t>(index)];
                 current.body.append(reply->read(maxPingBody + 1 - current.body.size()));
                 if (current.body.size() > maxPingBody) {
@@ -443,7 +445,13 @@ public:
         timer.start();
         loop.exec();
         timer.stop();
-        for (auto& worker : workers) if (worker.reply) { worker.reply->abort(); worker.reply->deleteLater(); }
+        for (auto& worker : workers) {
+            if (auto* reply = worker.reply) {
+                worker.reply = nullptr;
+                reply->abort();
+                reply->deleteLater();
+            }
+        }
         if (canceled || cancellation.canceled()) fail(id(), QStringLiteral("ping"), QStringLiteral("canceled"), QStringLiteral("операция отменена"));
         if (phaseTimedOut) fail(id(), QStringLiteral("ping"), QStringLiteral("timeout"), QStringLiteral("истекло время выполнения ping"), true);
         QList<double> values;
@@ -638,7 +646,7 @@ public:
                 QString asnIp;
                 if (validIp(value.value("ip").toString().trimmed(), &asnIp) && asnIp == ip) {
                     isp = value.value("provider_name").toString().trimmed();
-                    if (isp.size() > 255 || isp.contains(QRegularExpression(QStringLiteral("[\\r\\n\\x00]")))) isp.clear();
+                    if (isp.toUtf8().size() > 255 || isp.contains(QRegularExpression(QStringLiteral("[\\r\\n\\x00]")))) isp.clear();
                 }
             } catch (const OpError& error) {
                 if (error.code == QStringLiteral("canceled") || error.code == QStringLiteral("timeout") || remaining(15000) <= 0) throw;
@@ -666,8 +674,10 @@ private:
         if (remaining(15000) <= 0) fail(id(), phase, QStringLiteral("timeout"), QStringLiteral("истекло время выполнения измерения"), true);
         QWebSocket socket;
         socket.setReadBufferSize(maxWebSocketMessage);
+        socket.setMaxAllowedIncomingFrameSize(maxWebSocketMessage);
+        socket.setMaxAllowedIncomingMessageSize(maxWebSocketMessage);
         QEventLoop loop; QTimer timer; timer.setInterval(10); QElapsedTimer deadline;
-        const int probeTimeout = std::min(8000, remaining(8000));
+        const int probeTimeout = std::min(8000, remaining(15000));
         bool done = false, ok = false; QString failure; int state = 0, receivedPings = 0;
         QElapsedTimer pingClock;
         auto finishError = [&](const QString& message, const QString& code = QStringLiteral("protocol")) { if (done) return; failure = message; if (failureCode) *failureCode = code; done = true; socket.abort(); loop.quit(); };

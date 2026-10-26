@@ -471,6 +471,7 @@ public:
         QObject::connect(&server_, &QWebSocketServer::newConnection, &server_, [this] {
             while (server_.hasPendingConnections()) {
                 auto* socket = server_.nextPendingConnection();
+                socket->setParent(&server_);
                 QObject::connect(socket, &QWebSocket::textMessageReceived, socket, [this, socket](const QString& message) {
                     if (message == "HI") socket->sendTextMessage("HELLO");
                     else if (message == "GETINFO") socket->sendTextMessage("qms_testing");
@@ -650,7 +651,7 @@ void testSpeedtestConnectionUsesIPThenOptionalASNEndpoints() {
 void testDiscoveryRejectsWrongContentTypeAndOversizedBody() {
     const std::vector<std::pair<LocalHttpServer::Response, bool>> cases{
         {{"200 OK", "text/plain", "{}"}, true},
-        {{"200 OK", "application/json", QByteArray(2 * 1024 * 1024 + 1, 'x')}, false},
+        {{"200 OK", "application/json", QByteArray(2 * 1024 * 1024 + 1, 'x')}, true},
     };
     for (const auto& [response, retryable] : cases) {
         LocalHttpServer server([&](const QByteArray&) { return response; });
