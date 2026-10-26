@@ -201,6 +201,9 @@ QString helpText() {
   puls ip speedtest             IP и интернет-провайдер через speedtest.ru
   puls ip yandex --json         использовать конкретный сервис
 
+C++ dev: измерение загрузки и отдачи пока недоступно.
+Используйте --only ping или puls ip.
+
 Ctrl+C останавливает операцию · подробнее: README.md
 )");
 }

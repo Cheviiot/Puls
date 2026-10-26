@@ -1,0 +1,48 @@
+Puls  проверка скорости и качества интернета
+Яндекс.Интернетометр и speedtest.ru
+
+ИСПОЛЬЗОВАНИЕ
+  puls [service] [options]
+  puls ip [service] [options]
+  puls gui [options]
+
+СЕРВИСЫ
+  yandex                       Яндекс.Интернетометр
+  speedtest                    speedtest.ru
+  all                          оба сервиса последовательно
+
+КОМАНДЫ
+  ip [service]                 внешний IP и интернет-провайдер
+  gui                          открыть графический интерфейс
+  help                         показать справку
+  version                      показать версию
+
+ПАРАМЕТРЫ ИЗМЕРЕНИЯ
+  --profile <name>             quick, balanced или accurate
+  --duration <seconds>         время фазы · от 3 до 60 секунд
+  --connections <number>       0 — автоматически, вручную — от 1 до 16
+  --only <phase>               all, ping, download или upload
+  --server <host>              сервер измерения · только speedtest
+  --show-ip                    добавить данные подключения
+
+ОБЩИЕ ПАРАМЕТРЫ
+  --json                       машинный JSON без оформления
+  --verbose                    подробная диагностика в stderr
+  --no-color                   отключить цвета
+  -h, --help                   показать справку
+  --version                    показать версию
+
+ПРИМЕРЫ
+  puls                         выбрать сервис
+  puls gui                     открыть графический интерфейс
+  puls yandex                  полная проверка через Яндекс
+  puls all --profile quick      быстро проверить оба сервиса
+  puls speedtest --only ping    измерить только задержку
+  puls ip                      определить IP с резервным сервисом
+  puls ip speedtest             IP и интернет-провайдер через speedtest.ru
+  puls ip yandex --json         использовать конкретный сервис
+
+C++ dev: измерение загрузки и отдачи пока недоступно.
+Используйте --only ping или puls ip.
+
+Ctrl+C останавливает операцию · подробнее: README.md

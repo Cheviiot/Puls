@@ -14,6 +14,10 @@
 #include <thread>
 
 #ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <fcntl.h>
 #include <io.h>
 #else
@@ -53,6 +57,21 @@ private:
 };
 
 bool writeOutput(FILE* destination, const QByteArray& data) {
+#ifdef Q_OS_WIN
+    const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(destination)));
+    DWORD mode = 0;
+    if (handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode)) {
+        const auto text = QString::fromUtf8(data);
+        qsizetype offset = 0;
+        while (offset < text.size()) {
+            const auto count = static_cast<DWORD>(qMin<qsizetype>(text.size() - offset, 16384));
+            DWORD written = 0;
+            if (!WriteConsoleW(handle, text.utf16() + offset, count, &written, nullptr) || written == 0) return false;
+            offset += written;
+        }
+        return true;
+    }
+#endif
     qsizetype offset = 0;
     while (offset < data.size()) {
         const auto written = std::fwrite(data.constData() + offset, 1,
@@ -67,7 +86,9 @@ void errorOutput(const QString& text) { writeOutput(stderr, text.toUtf8()); }
 
 bool terminal(FILE* stream) {
 #ifdef Q_OS_WIN
-    return _isatty(_fileno(stream)) != 0;
+    const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)));
+    DWORD mode = 0;
+    return handle != INVALID_HANDLE_VALUE && GetConsoleMode(handle, &mode);
 #else
     return isatty(fileno(stream)) != 0;
 #endif
