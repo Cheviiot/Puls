@@ -1,6 +1,7 @@
 #include "puls/core.hpp"
 #include "puls/network.hpp"
 
+#include <QCoreApplication>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -113,7 +114,7 @@ void testInvalidCLIArguments() {
 }
 
 void testPingStatsParity() {
-    const std::vector<double> samples{
+    const QList<double> samples{
         10.0,
         std::numeric_limits<double>::quiet_NaN(),
         100.0,
@@ -573,7 +574,8 @@ void testMeasurementExitCodes() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    QCoreApplication application(argc, argv);
     testParseMeasurementCommands();
     testBooleanFlagSyntax();
     testInvalidCLIArguments();
