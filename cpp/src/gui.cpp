@@ -1,6 +1,8 @@
 #include "puls/gui.hpp"
 
 #include <QApplication>
+#include <QBoxLayout>
+#include <QButtonGroup>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDir>
@@ -8,6 +10,7 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QGuiApplication>
+#include <QGridLayout>
 #include <QHash>
 #include <QIcon>
 #include <QLabel>
@@ -16,6 +19,7 @@
 #include <QMessageBox>
 #include <QPalette>
 #include <QPointer>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
@@ -61,6 +65,7 @@ public:
         build();
         applyTheme();
         rebuildResults();
+        updateServiceSelection();
         connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
             bool background = state == Qt::ApplicationHidden || state == Qt::ApplicationSuspended;
 #ifdef Q_OS_ANDROID
@@ -88,11 +93,17 @@ public:
         const QList<QSize> sizes{{360, 294}, {360, 640}, {900, 600}, {1280, 800}, {360, 294}};
         for (const auto& theme : QStringList{"light", "dark"}) {
             theme_ = theme;
+            themes_->setCurrentIndex(themes_->findData(theme));
             applyTheme();
             for (const auto& state : QStringList{"initial", "results", "error", "running"}) {
                 rebuildResults();
                 status_->setText(QStringLiteral("Готово к проверке"));
                 action_->setText(QStringLiteral("Начать проверку"));
+                title_->setText(QStringLiteral("Ваше соединение"));
+                subtitle_->setText(QStringLiteral("Узнайте задержку и скорость интернета через выбранный сервис."));
+                progress_->hide();
+                selector_->setEnabled(state != "running");
+                summaryButton_->setEnabled(state != "running");
                 if (state == "results" || state == "error") {
                     QJsonArray results;
                     for (const auto& id : QStringList{"yandex", "speedtest"}) {
@@ -111,13 +122,19 @@ public:
                     }
                     finish(QJsonObject{{"status", state == "error" ? "error" : "ok"}, {"results", results}});
                 } else if (state == "running") {
+                    title_->setText(QStringLiteral("Проверяем соединение"));
+                    subtitle_->setText(QStringLiteral("Проверка займёт немного времени. Её можно остановить в любой момент."));
                     status_->setText(QStringLiteral("Яндекс.Интернетометр · Измеряем скорость загрузки…"));
                     action_->setText(QStringLiteral("Остановить"));
+                    progress_->setRange(0, 0);
+                    progress_->show();
                 }
                 for (qsizetype index = 0; index < sizes.size(); ++index) {
                     resize(sizes[index]);
                     QApplication::processEvents();
                     centralWidget()->layout()->activate();
+                    QApplication::processEvents();
+                    adaptMetrics();
                     QApplication::processEvents();
                     const auto filename = QStringLiteral("%1/%2-%3-%4x%5%6.png")
                         .arg(directory, theme, state).arg(width()).arg(height())
@@ -149,6 +166,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override {
         QMainWindow::resizeEvent(event);
         if (sizeTimer_) sizeTimer_->start();
+        queueAdapt();
     }
 
 private:
@@ -159,6 +177,9 @@ private:
         QLabel* download = nullptr;
         QLabel* upload = nullptr;
         QLabel* error = nullptr;
+        QGridLayout* metrics = nullptr;
+        QList<QFrame*> tiles;
+        QList<QBoxLayout*> tileLayouts;
     };
 
     Config config_;
@@ -171,6 +192,13 @@ private:
     QLabel* status_ = nullptr;
     QLabel* summary_ = nullptr;
     QLabel* connection_ = nullptr;
+    QLabel* title_ = nullptr;
+    QLabel* subtitle_ = nullptr;
+    QProgressBar* progress_ = nullptr;
+    QScrollArea* resultsScroll_ = nullptr;
+    QFrame* selector_ = nullptr;
+    QButtonGroup* services_ = nullptr;
+    QPushButton* summaryButton_ = nullptr;
     QPushButton* action_ = nullptr;
     QPushButton* menu_ = nullptr;
     QComboBox* service_ = nullptr;
@@ -184,6 +212,8 @@ private:
     std::shared_ptr<Cancellation> cancellation_;
     QHash<QString, Rows> rows_;
     bool closePending_ = false;
+    bool adaptPending_ = false;
+    bool wideMetrics_ = false;
 
     void load(const Config& initial) {
         QSettings preferences("Puls", "Puls");
@@ -242,7 +272,7 @@ private:
         auto* layout = new QHBoxLayout(outer);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->addStretch();
-        content->setMaximumWidth(720);
+        content->setMaximumWidth(760);
         content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         layout->addWidget(content, 1);
         layout->addStretch();
@@ -272,14 +302,60 @@ private:
         auto* content = new QWidget;
         content->setObjectName("resultContent");
         auto* contentLayout = new QVBoxLayout(content);
-        contentLayout->setContentsMargins(0, 4, 0, 8);
-        contentLayout->setSpacing(12);
+        contentLayout->setContentsMargins(0, 8, 0, 16);
+        contentLayout->setSpacing(20);
+        auto* introduction = new QWidget;
+        auto* introductionLayout = new QVBoxLayout(introduction);
+        introductionLayout->setContentsMargins(0, 0, 0, 4);
+        introductionLayout->setSpacing(8);
+        auto* eyebrow = label(QStringLiteral("ПРОВЕРКА ИНТЕРНЕТА"));
+        eyebrow->setObjectName("connectionEyebrow");
+        introductionLayout->addWidget(eyebrow);
+        title_ = label(QStringLiteral("Ваше соединение"));
+        title_->setObjectName("connectionTitle");
+        introductionLayout->addWidget(title_);
+        subtitle_ = label(QStringLiteral("Узнайте задержку и скорость интернета через выбранный сервис."));
+        subtitle_->setObjectName("connectionSubtitle");
+        subtitle_->setProperty("secondary", true);
+        introductionLayout->addWidget(subtitle_);
+        contentLayout->addWidget(introduction);
+        selector_ = new QFrame;
+        selector_->setObjectName("serviceSelector");
+        selector_->setAccessibleName(QStringLiteral("Сервис измерения"));
+        auto* segmented = new QHBoxLayout(selector_);
+        segmented->setContentsMargins(4, 4, 4, 4);
+        segmented->setSpacing(4);
+        services_ = new QButtonGroup(this);
+        const QStringList names{QStringLiteral("Яндекс"), QStringLiteral("speedtest"), QStringLiteral("Оба")};
+        for (int index = 0; index < names.size(); ++index) {
+            auto* button = new QPushButton(names[index]);
+            button->setCheckable(true);
+            button->setObjectName(QStringLiteral("serviceSegment_%1").arg(index));
+            button->setProperty("segment", true);
+            button->setMinimumHeight(36);
+            services_->addButton(button, index);
+            segmented->addWidget(button, 1);
+        }
+        contentLayout->addWidget(selector_);
+        summaryButton_ = new QPushButton;
+        summaryButton_->setObjectName("summaryButton");
+        summaryButton_->setProperty("summaryAction", true);
+        auto* summaryLayout = new QHBoxLayout(summaryButton_);
+        summaryLayout->setContentsMargins(12, 8, 12, 8);
+        summaryLayout->setSpacing(12);
         summary_ = label("");
         summary_->setObjectName("settingsSummary");
         summary_->setProperty("secondary", true);
-        contentLayout->addWidget(summary_);
+        summary_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        summaryLayout->addWidget(summary_, 1);
+        auto* chevron = label(QStringLiteral("›"));
+        chevron->setProperty("secondary", true);
+        chevron->setFixedWidth(16);
+        chevron->setAttribute(Qt::WA_TransparentForMouseEvents);
+        summaryLayout->addWidget(chevron);
+        contentLayout->addWidget(summaryButton_);
         resultsLayout_ = new QVBoxLayout;
-        resultsLayout_->setSpacing(12);
+        resultsLayout_->setSpacing(24);
         contentLayout->addLayout(resultsLayout_);
         connection_ = label("");
         connection_->setObjectName("connectionLabel");
@@ -287,14 +363,22 @@ private:
         connection_->hide();
         contentLayout->addWidget(connection_);
         contentLayout->addStretch();
-        auto* resultScroll = scroll(centered(content));
-        resultScroll->setObjectName("resultsScroll");
-        mainLayout->addWidget(resultScroll, 1);
+        resultsScroll_ = scroll(centered(content));
+        resultsScroll_->setObjectName("resultsScroll");
+        mainLayout->addWidget(resultsScroll_, 1);
 
         auto* footer = new QWidget;
         auto* footerLayout = new QVBoxLayout(footer);
         footerLayout->setContentsMargins(0, 4, 0, 0);
         footerLayout->setSpacing(8);
+        progress_ = new QProgressBar;
+        progress_->setObjectName("phaseProgress");
+        progress_->setRange(0, 1);
+        progress_->setValue(0);
+        progress_->setTextVisible(false);
+        progress_->setFixedHeight(3);
+        progress_->hide();
+        footerLayout->addWidget(progress_);
         status_ = label(QStringLiteral("Готово к проверке"));
         status_->setObjectName("statusLabel");
         status_->setAlignment(Qt::AlignCenter);
@@ -310,6 +394,18 @@ private:
         mainLayout->addWidget(centered(footer));
         pages_->addWidget(measure_);
         buildSettings();
+        connect(summaryButton_, &QPushButton::clicked, this, [this] {
+            if (!thread_) pages_->setCurrentWidget(settings_);
+        });
+        connect(services_, &QButtonGroup::idClicked, this, [this](int index) {
+            if (thread_) return;
+            const QStringList ids{"yandex", "speedtest", "all"};
+            service_->setCurrentIndex(service_->findData(ids[index]));
+            rebuildResults();
+            title_->setText(QStringLiteral("Ваше соединение"));
+            subtitle_->setText(QStringLiteral("Узнайте задержку и скорость интернета через выбранный сервис."));
+            status_->setText(QStringLiteral("Готово к проверке"));
+        });
         connect(action_, &QPushButton::clicked, this, [this] {
             if (thread_) cancel(); else start();
         });
@@ -399,7 +495,7 @@ private:
             pages_->setCurrentWidget(measure_);
         });
         connect(service_, &QComboBox::currentIndexChanged, this, [this] {
-            config_.service = service_->currentData().toString(); saveOptions();
+            config_.service = service_->currentData().toString(); updateServiceSelection(); saveOptions();
         });
         connect(profile_, &QComboBox::currentIndexChanged, this, [this] {
             config_.profile = profile_->currentData().toString();
@@ -420,27 +516,62 @@ private:
         });
     }
 
-    QLabel* row(QVBoxLayout* layout, const QString& title, const QString& name) {
-        auto* widget = new QWidget;
-        auto* line = new QHBoxLayout(widget);
-        line->setContentsMargins(14, 12, 14, 12);
-        line->setSpacing(12);
+    QLabel* metricTile(Rows& rows, const QString& title, const QString& name) {
+        auto* widget = new QFrame;
+        widget->setObjectName("metricTile");
+        widget->setMinimumWidth(0);
+        auto* line = new QBoxLayout(QBoxLayout::LeftToRight, widget);
+        line->setContentsMargins(16, 14, 16, 14);
+        line->setSpacing(10);
         auto* caption = label(title);
+        caption->setProperty("secondary", true);
         auto* value = label(QStringLiteral("—"));
         value->setObjectName(name);
         value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         value->setProperty("metricValue", true);
         line->addWidget(caption, 1);
-        line->addWidget(value, 1);
-        layout->addWidget(widget);
+        line->addWidget(value, 2);
+        rows.tiles.append(widget);
+        rows.tileLayouts.append(line);
         return value;
     }
 
-    void separator(QVBoxLayout* layout) {
-        auto* line = new QFrame;
-        line->setObjectName("rowSeparator");
-        line->setFixedHeight(1);
-        layout->addWidget(line);
+    void updateServiceSelection() {
+        if (!services_) return;
+        const QStringList ids{"yandex", "speedtest", "all"};
+        if (auto* button = services_->button(ids.indexOf(config_.service))) button->setChecked(true);
+    }
+
+    void queueAdapt() {
+        if (!resultsScroll_ || adaptPending_) return;
+        adaptPending_ = true;
+        QTimer::singleShot(0, this, [this] {
+            adaptPending_ = false;
+            adaptMetrics();
+        });
+    }
+
+    void adaptMetrics() {
+        if (!resultsScroll_) return;
+        wideMetrics_ = resultsScroll_->viewport()->width() >= 640;
+        for (auto& rows : rows_) {
+            while (auto* item = rows.metrics->takeAt(0)) delete item;
+            for (int index = 0; index < 3; ++index) {
+                rows.metrics->setColumnStretch(index, wideMetrics_ ? 1 : 0);
+                rows.metrics->setRowStretch(index, 0);
+                auto* tile = rows.tiles[index];
+                auto* layout = rows.tileLayouts[index];
+                layout->setDirection(wideMetrics_ ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+                layout->setStretch(0, wideMetrics_ ? 0 : 1);
+                layout->setStretch(1, wideMetrics_ ? 0 : 2);
+                tile->setMinimumHeight(wideMetrics_ ? 112 : 72);
+                auto* value = static_cast<QLabel*>(layout->itemAt(1)->widget());
+                value->setAlignment((wideMetrics_ ? Qt::AlignLeft : Qt::AlignRight) | Qt::AlignVCenter);
+                rows.metrics->addWidget(tile, wideMetrics_ ? 0 : index, wideMetrics_ ? index : 0);
+            }
+            rows.metrics->invalidate();
+        }
+        resultsScroll_->widget()->updateGeometry();
     }
 
     void rebuildResults() {
@@ -455,21 +586,19 @@ private:
             card->setObjectName("serviceCard_" + id);
             auto* outer = new QVBoxLayout(card);
             outer->setContentsMargins(0, 0, 0, 0);
-            outer->setSpacing(8);
+            outer->setSpacing(12);
             auto* title = label(displayName(id));
             title->setProperty("heading", true);
             outer->addWidget(title);
             Rows values;
             values.box = new QFrame;
             values.box->setObjectName("resultBox");
-            auto* content = new QVBoxLayout(values.box);
-            content->setContentsMargins(0, 0, 0, 0);
-            content->setSpacing(0);
-            values.ping = row(content, QStringLiteral("Задержка"), "result_" + id + "_ping");
-            separator(content);
-            values.download = row(content, QStringLiteral("Загрузка"), "result_" + id + "_download");
-            separator(content);
-            values.upload = row(content, QStringLiteral("Отдача"), "result_" + id + "_upload");
+            values.metrics = new QGridLayout(values.box);
+            values.metrics->setContentsMargins(0, 0, 0, 0);
+            values.metrics->setSpacing(10);
+            values.ping = metricTile(values, QStringLiteral("Задержка"), "result_" + id + "_ping");
+            values.download = metricTile(values, QStringLiteral("Загрузка"), "result_" + id + "_download");
+            values.upload = metricTile(values, QStringLiteral("Отдача"), "result_" + id + "_upload");
             outer->addWidget(values.box);
             values.server = label(QStringLiteral("Сервер измерения будет выбран автоматически"));
             values.server->setObjectName("server_" + id);
@@ -483,10 +612,14 @@ private:
             resultsLayout_->addWidget(card);
             rows_.insert(id, values);
         }
-        summary_->setText(QStringLiteral("%1 с на этап · %2")
-                              .arg(config_.durationSeconds)
-                              .arg(config_.connections == 0 ? QStringLiteral("соединения автоматически")
-                                                           : QStringLiteral("соединений: %1").arg(config_.connections)));
+        const auto profile = config_.profile == "quick" ? QStringLiteral("Быстрый") : config_.profile == "accurate" ? QStringLiteral("Точный") : QStringLiteral("Сбалансированный");
+        const auto phase = config_.only == "ping" ? QStringLiteral("Только задержка") : config_.only == "download" ? QStringLiteral("Только загрузка") : QStringLiteral("Только отдача");
+        summary_->setText(QStringLiteral("%1 · %2 с · Параметры")
+                             .arg(config_.only == "all" ? profile : phase).arg(config_.durationSeconds));
+        summaryButton_->setAccessibleName(QStringLiteral("Параметры измерения: ") + summary_->text());
+        updateServiceSelection();
+        adaptMetrics();
+        queueAdapt();
     }
 
     void applyTheme() {
@@ -514,14 +647,25 @@ private:
             QWidget { color: %2; }
             QLabel { background: transparent; }
             QLabel[secondary="true"] { color: %3; }
-            QLabel[heading="true"], QLabel[metricValue="true"] { font-weight: 600; }
-            QLabel[errorText="true"] { color: %4; }
-            QFrame#resultBox { background: %5; border: 1px solid %6; border-radius: 12px; }
-            QFrame#rowSeparator { background: %6; margin-left: 14px; margin-right: 14px; }
+            QLabel[heading="true"] { font-weight: 600; }
+            QLabel#connectionEyebrow { color: %7; font-size: 11px; font-weight: 600; letter-spacing: 1px; }
+            QLabel#connectionTitle { font-size: 28px; font-weight: 600; }
+            QLabel#connectionSubtitle { font-size: 15px; }
+            QLabel[metricValue="true"] { font-size: 24px; font-weight: 600; }
+            QLabel[errorText="true"] { color: %4; background: %5; border: 1px solid %6; border-radius: 10px; padding: 12px; }
+            QFrame#resultBox { background: transparent; border: 0; }
+            QFrame#metricTile { background: %5; border: 1px solid %6; border-radius: 14px; }
+            QFrame#serviceSelector { background: %8; border: 0; border-radius: 14px; }
             QPushButton { background: %5; border: 1px solid %6; border-radius: 8px; padding: 8px 14px; }
             QPushButton:hover { border-color: %7; }
             QPushButton:focus, QComboBox:focus, QSpinBox:focus { border: 2px solid %7; }
             QPushButton[flatControl="true"] { background: transparent; border: 0; }
+            QPushButton[segment="true"] { background: transparent; border: 0; border-radius: 10px; padding: 6px 8px; }
+            QPushButton[segment="true"]:checked { background: %5; color: %7; font-weight: 600; }
+            QPushButton[segment="true"]:focus { border: 2px solid %7; }
+            QPushButton[summaryAction="true"] { background: transparent; border: 0; border-radius: 10px; padding: 0; text-align: left; }
+            QPushButton[summaryAction="true"]:hover { background: %8; }
+            QPushButton[summaryAction="true"]:focus { border: 2px solid %7; }
             QPushButton[primaryAction="true"] { background: #3584e4; color: white; border: 0; border-radius: 22px; padding: 10px 28px; font-weight: 600; }
             QPushButton[primaryAction="true"]:hover { background: #2674d3; }
             QPushButton[primaryAction="true"]:focus { border: 2px solid %2; }
@@ -531,8 +675,15 @@ private:
             QMenu { background: %5; border: 1px solid %6; border-radius: 8px; padding: 6px; }
             QMenu::item { padding: 8px 16px; }
             QMenu::item:selected { background: #3584e4; color: white; border-radius: 5px; }
+            QProgressBar { background: %8; border: 0; border-radius: 1px; }
+            QProgressBar::chunk { background: #3584e4; border-radius: 1px; }
+            QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
+            QScrollBar::handle:vertical { background: %6; border-radius: 4px; min-height: 32px; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; width: 0; border: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
         )").arg(background.name(), foreground.name(), secondary.name(),
-                 dark ? QStringLiteral("#ff938d") : QStringLiteral("#c01c28"), surface.name(), border.name(), accent.name()));
+                 dark ? QStringLiteral("#ff938d") : QStringLiteral("#c01c28"), surface.name(), border.name(), accent.name(),
+                 dark ? QStringLiteral("#303034") : QStringLiteral("#ededf1")));
     }
 
     void start() {
@@ -540,6 +691,12 @@ private:
         connection_->clear();
         connection_->hide();
         status_->setText(QStringLiteral("Начинаем проверку…"));
+        title_->setText(QStringLiteral("Проверяем соединение"));
+        subtitle_->setText(QStringLiteral("Проверка займёт немного времени. Её можно остановить в любой момент."));
+        progress_->setRange(0, 0);
+        progress_->show();
+        selector_->setEnabled(false);
+        summaryButton_->setEnabled(false);
         action_->setText(QStringLiteral("Остановить"));
         action_->setAccessibleName(QStringLiteral("Остановить проверку"));
         action_->setEnabled(true);
@@ -557,6 +714,8 @@ private:
             } catch (const std::exception& error) {
                 const auto message = QString::fromUtf8(error.what());
                 QMetaObject::invokeMethod(this, [this, message] {
+                    title_->setText(QStringLiteral("Проверка не завершена"));
+                    subtitle_->setText(QStringLiteral("Попробуйте ещё раз или выберите другой сервис измерения."));
                     status_->setText(QStringLiteral("Не удалось выполнить проверку: %1").arg(message));
                 }, Qt::QueuedConnection);
             }
@@ -568,6 +727,9 @@ private:
             action_->setText(QStringLiteral("Начать проверку"));
             action_->setAccessibleName(QStringLiteral("Начать проверку"));
             action_->setEnabled(true);
+            selector_->setEnabled(true);
+            summaryButton_->setEnabled(true);
+            progress_->hide();
             if (closePending_) close();
         });
         thread_->start();
@@ -612,7 +774,13 @@ private:
         const auto id = event.value("service").toString();
         const auto phase = event.value("phase").toString();
         if (kind == "phase_started") {
+            if (cancellation_ && cancellation_->canceled()) return;
             status_->setText(displayName(id) + QStringLiteral(" · ") + phaseName(phase));
+            if (phase == "select") progress_->setRange(0, 0);
+            else {
+                progress_->setRange(0, 3);
+                progress_->setValue(phase == "ping" ? 0 : phase == "download" ? 1 : 2);
+            }
         } else if (kind == "server_selected") serverResult(id, event.value("server").toObject());
         else if (kind == "phase_completed") phaseResult(id, phase, event.value("phase_result").toObject());
     }
@@ -645,6 +813,12 @@ private:
             connection_->setVisible(!parts.isEmpty());
         }
         const auto status = envelope.value("status").toString();
+        title_->setText(status == "ok" || status == "partial" ? QStringLiteral("Результаты проверки") :
+                        status == "canceled" ? QStringLiteral("Проверка остановлена") : QStringLiteral("Проверка не завершена"));
+        subtitle_->setText(status == "ok" ? QStringLiteral("Измерение завершено. Можно запустить проверку ещё раз.") :
+                           status == "partial" ? QStringLiteral("Часть этапов выполнена. Подробности — рядом с результатами.") :
+                           status == "canceled" ? QStringLiteral("Вы можете изменить параметры и начать заново.") :
+                                                  QStringLiteral("Попробуйте ещё раз или выберите другой сервис измерения."));
         status_->setText(status == "ok" ? QStringLiteral("Проверка завершена") :
                          status == "partial" ? QStringLiteral("Получен частичный результат") :
                          status == "canceled" ? QStringLiteral("Проверка остановлена") :

@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QLabel>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -58,10 +59,12 @@ Widget* control(QWidget* window, const char* name) {
 struct State {
     bool block = false;
     bool fail = false;
+    bool blockSelection = false;
     QThread* guiThread = nullptr;
     std::atomic_int created{0};
     std::atomic_int destroyed{0};
     std::atomic_int entered{0};
+    std::atomic_int selected{0};
     std::atomic_int canceled{0};
     std::atomic_int wrongThread{0};
 };
@@ -81,6 +84,13 @@ public:
 
     QJsonObject select(const puls::Config&, const puls::Cancellation& cancellation) override {
         audit();
+        state_->selected.fetch_add(1);
+        if (state_->blockSelection) {
+            QElapsedTimer elapsed;
+            elapsed.start();
+            while (!cancellation.canceled() && elapsed.elapsed() < 3000) QThread::msleep(1);
+            if (cancellation.canceled()) state_->canceled.fetch_add(1);
+        }
         puls::checkCanceled(cancellation, "select");
         return {{"name", "Synthetic server that must stay in memory"},
                 {"city", QStringLiteral("Владивосток")}, {"region", QJsonValue::Null}};
@@ -280,6 +290,47 @@ void testPrivatePreferences() {
     expect(!contents.contains("203.0.113.7") && !contents.contains("Synthetic ISP") && !contents.contains("Synthetic server"), "preferences contain no IP, ISP, server or result text");
 }
 
+void testServiceNavigationAndDiscoveryProgress() {
+    clearPreferences();
+    const auto backend = state();
+    std::unique_ptr<QWidget> window(puls::createMainWindow(config(), factory(backend)));
+    window->show();
+    settle();
+    control<QPushButton>(window.get(), "serviceSegment_2")->click();
+    expect(control<QLabel>(window.get(), "result_speedtest_ping")->isVisible(), "inline both-services selector exposes both result panels");
+    auto* summary = control<QPushButton>(window.get(), "summaryButton");
+    summary->click();
+    expect(control<QWidget>(window.get(), "settingsPage")->isVisible(), "parameter summary opens the separate settings page");
+    control<QPushButton>(window.get(), "backButton")->click();
+    expect(control<QWidget>(window.get(), "measurePage")->isVisible(), "settings back action returns to the dashboard");
+    auto* start = control<QPushButton>(window.get(), "startButton");
+    start->click();
+    expect(until([&] { return backend->destroyed.load() == 2 && start->text() == QStringLiteral("Начать проверку"); }), "inline selection runs both services through Runner");
+    expect(control<QLabel>(window.get(), "result_yandex_ping")->text() == QStringLiteral("12.34 мс") &&
+           control<QLabel>(window.get(), "result_speedtest_ping")->text() == QStringLiteral("12.34 мс"), "both selected services populate separate results");
+    window->close();
+    window.reset();
+    settle();
+
+    const auto discovery = state();
+    discovery->blockSelection = true;
+    window.reset(puls::createMainWindow(config(), factory(discovery)));
+    window->show();
+    settle();
+    start = control<QPushButton>(window.get(), "startButton");
+    start->click();
+    expect(until([&] { return discovery->selected.load() == 1; }), "discovery runs asynchronously");
+    auto* progress = control<QProgressBar>(window.get(), "phaseProgress");
+    expect(until([&] { return progress->isVisible() && progress->minimum() == 0 && progress->maximum() == 0; }), "server discovery exposes indeterminate progress");
+    expect(!control<QPushButton>(window.get(), "serviceSegment_0")->isEnabled() &&
+           !control<QPushButton>(window.get(), "summaryButton")->isEnabled(), "active run protects service and parameter controls");
+    start->click();
+    expect(until([&] { return discovery->destroyed.load() == 1 && start->isEnabled(); }, 1000), "discovery can be canceled through the pinned action");
+    expect(!progress->isVisible() && control<QPushButton>(window.get(), "summaryButton")->isEnabled(), "completion removes progress and restores parameter access");
+    window->close();
+    settle();
+}
+
 void assertControlsVisible(QWidget* window) {
     auto* start = control<QPushButton>(window, "startButton");
     auto* menu = control<QPushButton>(window, "menuButton");
@@ -347,6 +398,7 @@ int main(int argc, char** argv) {
         testStopAndRestart();
         testCloseAndDestructionCancel();
         testPrivatePreferences();
+        testServiceNavigationAndDiscoveryProgress();
         testResponsiveErrorsAndThemes();
     } catch (const std::exception& error) {
         ++failures;
