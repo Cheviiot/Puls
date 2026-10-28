@@ -5,6 +5,7 @@
 /scripts/__pycache__/
 /scripts/tests/__pycache__/
 /cpp/android/ci/__pycache__/
+/aqtinstall.log
 /puls
 /puls.exe
 *.apk

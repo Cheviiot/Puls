@@ -96,6 +96,18 @@ podman exec --user 1000 --workdir "$PWD" aeonlc-build \
 в [Android-инструкции](../cpp/android/README.md). APK подписывается существующим
 ключом только в CI. Для sanitizers в Fedora нужны `libasan`, `libubsan` и `libtsan`.
 
+На icebook дополнительно установлен официальный Qt 6.12.0 SDK в
+`~/.local/share/toolchains/puls-qt612-dev/6.12.0/gcc_64`. Он используется только
+внутри `aeonlc-build`: его готовые библиотеки требуют glibc 2.39 и не заменяют
+переносимый SDK, собранный на Ubuntu 22.04. Системный Qt контейнера не меняется.
+Точная локальная сборка и запуск:
+
+```sh
+podman exec --user 1000 --workdir "$PWD" aeonlc-build sh -lc \
+  'ionice -c 3 nice -n 19 cmake -S . -B build/cpp-qt612 -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH=/home/cheviiot/.local/share/toolchains/puls-qt612-dev/6.12.0/gcc_64 && ionice -c 3 nice -n 19 cmake --build build/cpp-qt612 --parallel 2'
+distrobox enter aeonlc-build -- env QT_QPA_PLATFORMTHEME= "$PWD/build/cpp-qt612/puls" gui
+```
+
 Дополнительные инструменты проверок устанавливаются в тот же контейнер:
 
 ```sh
