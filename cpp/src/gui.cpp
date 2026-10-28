@@ -17,6 +17,9 @@
 #include <QIcon>
 #include <QLabel>
 #include <QMainWindow>
+#include <QPainter>
+#include <QPen>
+#include <QPixmap>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPalette>
@@ -45,6 +48,25 @@
 
 namespace puls {
 namespace {
+QIcon menuIcon(const QColor& ink) {
+    QIcon icon;
+    for (const int scale : {1, 2, 3, 4}) {
+        QPixmap pixels(24 * scale, 24 * scale);
+        pixels.setDevicePixelRatio(scale);
+        pixels.fill(Qt::transparent);
+        QPainter painter(&pixels);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QPen pen(ink);
+        pen.setWidthF(1.8);
+        pen.setCapStyle(Qt::RoundCap);
+        painter.setPen(pen);
+        for (const int y : {6, 12, 18}) painter.drawLine(QPointF(4, y), QPointF(20, y));
+        painter.end();
+        icon.addPixmap(pixels);
+    }
+    return icon;
+}
+
 #ifdef Q_OS_ANDROID
 void reportAndroidRuntimeProbe(int attemptsLeft = 50) {
     const auto retry = [attemptsLeft] {
@@ -366,8 +388,9 @@ private:
         mainLayout->setSpacing(8);
         auto* toolbar = new QHBoxLayout;
         toolbar->addStretch();
-        menu_ = new QPushButton(QStringLiteral("☰"));
+        menu_ = new QPushButton;
         menu_->setObjectName("menuButton");
+        menu_->setIconSize(QSize(24, 24));
         menu_->setAccessibleName(QStringLiteral("Меню"));
         menu_->setToolTip(QStringLiteral("Меню"));
         menu_->setFixedSize(40, 36);
@@ -738,6 +761,7 @@ private:
         const QColor background(dark ? "#222226" : "#fafafb");
         const QColor surface(dark ? "#303034" : "#ffffff");
         const QColor foreground(dark ? "#f4f4f5" : "#202024");
+        menu_->setIcon(menuIcon(foreground));
         const QColor secondary(dark ? "#b4b4be" : "#686872");
         const QColor border(dark ? "#45454d" : "#dedee4");
         const QColor accent(dark ? "#78aeed" : "#3584e4");
@@ -770,6 +794,7 @@ private:
             QPushButton:hover { border-color: %7; }
             QPushButton:focus, QComboBox:focus, QSpinBox:focus { border: 2px solid %7; }
             QPushButton[flatControl="true"] { background: transparent; border: 0; }
+            QPushButton#menuButton { padding: 6px; }
             QPushButton[segment="true"] { background: transparent; border: 0; border-radius: 10px; padding: 6px 8px; }
             QPushButton[segment="true"]:checked { background: %5; color: %7; font-weight: 600; }
             QPushButton[segment="true"]:focus { border: 2px solid %7; }
