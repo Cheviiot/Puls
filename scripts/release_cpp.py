@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import unicodedata
 import zipfile
 
 TARGETS = (
@@ -25,7 +26,6 @@ TARGETS = (
     ("darwin", "arm64"),
 )
 VERSION_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-DRIVE_RE = re.compile(r"^[A-Za-z]:")
 MANIFEST = "RELEASE_MANIFEST.json"
 SUMS = "SHA256SUMS.txt"
 
@@ -56,20 +56,29 @@ def archive_name(version: str, os_name: str, arch: str) -> str:
 
 
 def safe_relative(path: str) -> PurePosixPath:
-    p = PurePosixPath(path)
-    if p.is_absolute() or DRIVE_RE.match(path) or not p.parts or any(part in ("", ".", "..") for part in p.parts):
+    if not isinstance(path, str) or any(unicodedata.category(char) == "Cc" for char in path):
         raise ReleaseError(f"unsafe archive path: {path!r}")
-    return p
+    if "\\" in path or ":" in path or path.startswith("/"):
+        raise ReleaseError(f"unsafe archive path: {path!r}")
+    parts = [part for part in path.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        raise ReleaseError(f"unsafe archive path: {path!r}")
+    return PurePosixPath(*parts)
 
 
 def safe_link(member: str, target: str, root_name: str) -> bool:
-    target_path = PurePosixPath(target)
-    if target_path.is_absolute() or DRIVE_RE.match(target):
+    try:
+        safe_relative(member)
+    except ReleaseError:
+        return False
+    if not isinstance(target, str) or any(unicodedata.category(char) == "Cc" for char in target):
+        return False
+    if not target or "\\" in target or ":" in target or target.startswith("/"):
         return False
     stack = list(PurePosixPath(member).parent.parts)
     if not stack or stack[0] != root_name:
         return False
-    for part in target_path.parts:
+    for part in target.split("/"):
         if part in ("", "."):
             continue
         if part == "..":
@@ -89,11 +98,12 @@ def inside(root: Path, path: Path) -> bool:
         return False
 
 
-def collect_stage(stage: Path) -> list[tuple[str, Path, int, str | None]]:
+def collect_stage(stage: Path, windows_target: bool = False) -> list[tuple[str, Path, int, str | None]]:
     root = stage.resolve(strict=True)
     if not root.is_dir():
         raise ReleaseError("stage must be a directory")
     entries: list[tuple[str, Path, int, str | None]] = []
+    seen: set[str] = set()
     for current, dirs, files in os.walk(root, topdown=True, followlinks=False):
         current_path = Path(current)
         names = sorted(dirs + files)
@@ -101,7 +111,13 @@ def collect_stage(stage: Path) -> list[tuple[str, Path, int, str | None]]:
         for name in names:
             source = current_path / name
             relative = source.relative_to(root).as_posix()
-            safe_relative(relative)
+            canonical = safe_relative(relative).as_posix()
+            if windows_target and any(part.endswith((".", " ")) for part in canonical.split("/")):
+                raise ReleaseError(f"Windows-ambiguous stage path: {relative}")
+            key = canonical.casefold() if windows_target else canonical
+            if key in seen:
+                raise ReleaseError(f"duplicate stage path: {relative}")
+            seen.add(key)
             info = source.lstat()
             if stat.S_ISDIR(info.st_mode):
                 entries.append((relative + "/", source, 0o755, None))
@@ -110,9 +126,18 @@ def collect_stage(stage: Path) -> list[tuple[str, Path, int, str | None]]:
                 entries.append((relative, source, mode, None))
             elif stat.S_ISLNK(info.st_mode):
                 target = os.readlink(source)
-                if os.path.isabs(target):
-                    raise ReleaseError(f"absolute symlink is not allowed: {relative}")
-                resolved = (source.parent / target).resolve(strict=False)
+                if not safe_link(relative, target, relative.split("/", 1)[0]):
+                    raise ReleaseError(f"symlink escapes stage: {relative} -> {target}")
+                try:
+                    lexical_resolved = (source.parent / target).resolve(strict=False)
+                except (OSError, RuntimeError) as exc:
+                    raise ReleaseError(f"dangling or cyclic symlink: {relative} -> {target}") from exc
+                if not inside(root, lexical_resolved):
+                    raise ReleaseError(f"symlink escapes stage: {relative} -> {target}")
+                try:
+                    resolved = (source.parent / target).resolve(strict=True)
+                except (OSError, RuntimeError) as exc:
+                    raise ReleaseError(f"dangling or cyclic symlink: {relative} -> {target}") from exc
                 if not inside(root, resolved):
                     raise ReleaseError(f"symlink escapes stage: {relative} -> {target}")
                 entries.append((relative, source, 0o777, target))
@@ -131,7 +156,10 @@ def expected_executable(stage: Path, os_name: str) -> Path:
             info = path.lstat()
         except FileNotFoundError:
             continue
-        if stat.S_ISREG(info.st_mode) and info.st_mode & 0o111:
+        if stat.S_ISREG(info.st_mode) and (os_name == "windows" or info.st_mode & 0o111):
+            stage_root = stage.resolve(strict=True)
+            if path.resolve(strict=True) != stage_root / path.relative_to(stage):
+                raise ReleaseError("staged executable path traverses a symlink")
             return path
     raise ReleaseError(f"stage is missing executable {candidates[0].relative_to(stage)}")
 
@@ -161,8 +189,11 @@ def create_archive(stage: Path, output: Path, version: str, os_name: str, arch: 
         raise ReleaseError("windows/arm64 is CLI-only; pass --nogui")
     if nogui and not cli_only_target:
         raise ReleaseError("--nogui is only supported for windows/arm64")
-    entries = collect_stage(stage)
+    entries = collect_stage(stage, windows_target=os_name == "windows")
     executable = expected_executable(stage, os_name)
+    executable_relative = executable.relative_to(stage.resolve()).as_posix()
+    entries = [(rel, source, 0o755 if rel == executable_relative else mode, link)
+               for rel, source, mode, link in entries]
     epoch = source_date_epoch()
     output.mkdir(parents=True, exist_ok=True)
     final = output / archive_name(version, os_name, arch)
@@ -192,6 +223,7 @@ def create_archive(stage: Path, output: Path, version: str, os_name: str, arch: 
                         zf.writestr(info, b"")
                     else:
                         info.external_attr = (stat.S_IFREG | mode) << 16
+                        info.compress_type = zipfile.ZIP_DEFLATED
                         zf.writestr(info, source.read_bytes())
         else:
             with open(temp_path, "wb") as raw:
@@ -245,39 +277,130 @@ def validate_archive(path: Path, expected_root: str, os_name: str, arch: str) ->
     if os_name == "darwin":
         expected_paths |= {f"{expected_root}/Puls.app/Contents/MacOS/puls",
                            f"{expected_root}/puls.app/Contents/MacOS/puls"}
+    case_insensitive = os_name == "windows"
+    expected_keys = {name.casefold() if case_insensitive else name for name in expected_paths}
     seen: set[str] = set()
     executable_paths: set[str] = set()
+    entries: dict[str, tuple[str, str | None]] = {}
     def check_member(name: str) -> None:
-        p = safe_relative(name.rstrip("/"))
+        p = safe_relative(name)
+        if case_insensitive and any(part.endswith((".", " ")) for part in p.parts):
+            raise ReleaseError(f"Windows-ambiguous archive path: {name}")
         if p.parts[0] != expected_root:
             raise ReleaseError(f"archive has unexpected root: {name}")
-        if name in seen:
+        key = p.as_posix().casefold() if case_insensitive else p.as_posix()
+        if key in seen:
             raise ReleaseError(f"archive contains duplicate path: {name}")
-        seen.add(name)
+        seen.add(key)
     if path.suffix == ".zip":
         with zipfile.ZipFile(path) as zf:
             for item in zf.infolist():
                 check_member(item.filename)
                 mode = item.external_attr >> 16
-                if item.filename in expected_paths and mode & 0o111:
-                    executable_paths.add(item.filename)
+                p = safe_relative(item.filename)
+                key = p.as_posix().casefold() if case_insensitive else p.as_posix()
                 if stat.S_ISLNK(mode):
-                    target = zf.read(item).decode("utf-8")
+                    try:
+                        target = zf.read(item).decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        raise ReleaseError(f"archive symlink target is not UTF-8: {item.filename}") from exc
                     if not safe_link(item.filename, target, expected_root):
                         raise ReleaseError(f"archive symlink escapes root: {item.filename}")
+                    entries[key] = ("symlink", target)
+                elif item.is_dir():
+                    entries[key] = ("dir", None)
+                else:
+                    entries[key] = ("file", None)
+                    path_key = p.as_posix().casefold() if case_insensitive else p.as_posix()
+                    if path_key in expected_keys and stat.S_ISREG(mode) and mode & 0o111:
+                        executable_paths.add(path_key)
     else:
         with tarfile.open(path, "r:gz") as tf:
             for item in tf:
                 check_member(item.name)
                 if not (item.isfile() or item.isdir() or item.issym()):
                     raise ReleaseError(f"archive contains special entry: {item.name}")
-                if item.isfile() and item.name in expected_paths and item.mode & 0o111:
-                    executable_paths.add(item.name)
+                p = safe_relative(item.name)
+                key = p.as_posix().casefold() if case_insensitive else p.as_posix()
                 if item.issym():
                     if not safe_link(item.name, item.linkname, expected_root):
                         raise ReleaseError(f"archive symlink escapes root: {item.name}")
-    if not expected_paths.intersection(executable_paths):
-        raise ReleaseError(f"archive is missing executable with executable mode for {os_name}/{arch}")
+                    entries[key] = ("symlink", item.linkname)
+                elif item.isdir():
+                    entries[key] = ("dir", None)
+                else:
+                    entries[key] = ("file", None)
+                    path_key = p.as_posix().casefold() if case_insensitive else p.as_posix()
+                    if path_key in expected_keys and item.mode & 0o111:
+                        executable_paths.add(path_key)
+    validate_archive_tree(entries, expected_root, case_insensitive)
+    if not expected_keys.intersection(executable_paths):
+        raise ReleaseError(f"archive is missing a regular executable with executable mode for {os_name}/{arch}")
+
+
+def validate_archive_tree(entries: dict[str, tuple[str, str | None]], root_name: str,
+                          case_insensitive: bool) -> None:
+    def key_for(parts: list[str]) -> str:
+        value = "/".join(parts)
+        return value.casefold() if case_insensitive else value
+
+    explicit = dict(entries)
+    for path, (kind, _) in explicit.items():
+        parts = path.split("/")
+        if parts[0].casefold() != root_name.casefold():
+            raise ReleaseError(f"archive has unexpected root: {path}")
+        for length in range(1, len(parts)):
+            parent = key_for(parts[:length])
+            parent_kind = explicit.get(parent, ("dir", None))[0]
+            if parent_kind != "dir":
+                raise ReleaseError(f"archive path descends through non-directory: {path}")
+            entries.setdefault(parent, ("dir", None))
+
+    def resolve(parts: list[str], visiting: set[str]) -> list[str]:
+        stack = parts[:1]
+        pending = parts[1:]
+        while pending:
+            part = pending.pop(0)
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if len(stack) <= 1:
+                    raise ReleaseError("archive symlink chain escapes package root")
+                stack.pop()
+                continue
+            stack.append(part)
+            key = key_for(stack)
+            kind, target = entries.get(key, ("missing", None))
+            if kind == "symlink":
+                if key in visiting:
+                    raise ReleaseError("archive contains cyclic symlinks")
+                visiting.add(key)
+                link_parts = target.split("/") if target is not None else []
+                stack.pop()
+                pending = link_parts + pending
+                if not pending:
+                    # Resolve a link whose target is the current directory.
+                    resolved = resolve(stack, visiting)
+                    visiting.remove(key)
+                    return resolved
+        return stack
+
+    for path, (kind, target) in explicit.items():
+        parts = path.split("/")
+        for length in range(1, len(parts)):
+            if entries.get(key_for(parts[:length]), ("missing", None))[0] == "symlink":
+                raise ReleaseError(f"archive path descends through symlink: {path}")
+        if kind != "symlink":
+            continue
+        try:
+            target_path = safe_relative("/".join(parts[:-1] + target.split("/")))
+        except ReleaseError:
+            # Parent-relative links are allowed if resolution stays inside root.
+            target_path = PurePosixPath(*parts[:-1], *target.split("/"))
+        resolved = resolve(list(target_path.parts), {path.casefold() if case_insensitive else path})
+        resolved_key = key_for(resolved)
+        if resolved_key not in entries:
+            raise ReleaseError(f"archive contains dangling symlink: {path}")
 
 
 def atomic_write(path: Path, content: bytes) -> None:
@@ -298,12 +421,60 @@ def atomic_write(path: Path, content: bytes) -> None:
         raise
 
 
+def existing_bytes(path: Path) -> bytes | None:
+    """Read an existing regular destination without following symlinks."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        raise ReleaseError(f"refusing to overwrite non-regular output: {path.name}")
+    return path.read_bytes()
+
+
+def owned_manifest(data: bytes) -> bool:
+    try:
+        doc = json.loads(data)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if (not isinstance(doc, dict) or doc.get("schema_version") != 2 or doc.get("product") != "Puls"
+            or not isinstance(doc.get("version"), str) or not VERSION_RE.fullmatch(doc["version"])
+            or not isinstance(doc.get("assets"), list)):
+        return False
+    prefix = f"Puls_{doc['version']}_"
+    return all(isinstance(asset, dict) and isinstance(asset.get("file"), str)
+               and asset["file"].startswith(prefix) and Path(asset["file"]).name == asset["file"]
+               and re.fullmatch(r"[0-9a-f]{64}", str(asset.get("sha256", "")))
+               and asset.get("kind") in ("archive", "apk") for asset in doc["assets"])
+
+
+def owned_checksums(data: bytes) -> bool:
+    try:
+        lines = data.decode("ascii").splitlines()
+    except UnicodeDecodeError:
+        return False
+    if not lines:
+        return False
+    names: set[str] = set()
+    for line in lines:
+        match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9_.-]+)", line)
+        if not match or match.group(2) in names:
+            return False
+        name = match.group(2)
+        if name != MANIFEST and name not in ("install.sh", "install.ps1") and not (
+                name.startswith("Puls_") and name.endswith((".zip", ".tar.gz", ".apk"))):
+            return False
+        names.add(name)
+    return MANIFEST in names and any(name.startswith("Puls_") for name in names)
+
+
 def assemble(version: str, input_dir: Path, output_dir: Path, install_sh: Path | None,
              install_ps1: Path | None, android_apk: Path | None) -> None:
     validate_version(version)
     input_dir = input_dir.resolve(strict=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_dir = output_dir.resolve(strict=True)
+    output_dir = output_dir.resolve(strict=False)
+    if output_dir.exists() and not output_dir.is_dir():
+        raise ReleaseError("output path must be a directory")
     installer_data: list[tuple[str, Path, bytes]] = []
     for source, name in ((install_sh, "install.sh"), (install_ps1, "install.ps1")):
         if source:
@@ -312,11 +483,12 @@ def assemble(version: str, input_dir: Path, output_dir: Path, install_sh: Path |
                 raise ReleaseError("install.ps1 must be ASCII without BOM")
             installer_data.append((name, source, data))
     artifacts: list[dict[str, object]] = []
-    files: dict[str, Path] = {}
-    pending_archives: list[tuple[str, Path, Path]] = []
+    pending_archives: list[tuple[str, Path, Path, str]] = []
     expected_names = {archive_name(version, os_name, arch) for os_name, arch in TARGETS}
+    prefix = f"Puls_{version}_".casefold()
     candidates = {path.name for path in input_dir.iterdir()
-                  if path.name.startswith(f"Puls_{version}_") and path.name.endswith((".zip", ".tar.gz", ".apk"))}
+                  if path.name.casefold().startswith(prefix)
+                  and path.name.casefold().endswith((".zip", ".tar.gz", ".apk"))}
     unexpected = candidates - expected_names - {f"Puls_{version}_android.apk"}
     if unexpected:
         raise ReleaseError(f"unexpected release artifacts: {', '.join(sorted(unexpected))}")
@@ -328,44 +500,78 @@ def assemble(version: str, input_dir: Path, output_dir: Path, install_sh: Path |
         root = name.removesuffix(".tar.gz").removesuffix(".zip")
         validate_archive(source, root, os_name, arch)
         dest = output_dir / name
-        if source.resolve() != dest.resolve() and (dest.exists() or dest.is_symlink()):
-            if not dest.is_file() or digest(dest) != digest(source):
+        source_digest = digest(source)
+        old_dest = existing_bytes(dest)
+        if old_dest is not None and source.resolve() != dest.resolve():
+            if hashlib.sha256(old_dest).hexdigest() != source_digest:
                 raise ReleaseError(f"refusing to overwrite unrelated output: {name}")
-        pending_archives.append((name, source, dest))
+        pending_archives.append((name, source, dest, source_digest))
         caps = ["cli"] if (os_name, arch) == ("windows", "arm64") else ["cli", "gui"]
-        files[name] = dest
-        artifacts.append({"os": os_name, "arch": arch, "file": name, "sha256": digest(source),
+        artifacts.append({"os": os_name, "arch": arch, "file": name, "sha256": source_digest,
                           "kind": "archive", "capabilities": caps})
     if android_apk and (not android_apk.is_file() or android_apk.is_symlink()):
         raise ReleaseError("Android APK must be a regular file")
-    for name, source, dest in pending_archives:
-        if source.resolve() != dest.resolve() and not dest.exists():
-            atomic_write(dest, source.read_bytes())
+    if android_apk is None:
+        candidate_apk = input_dir / f"Puls_{version}_android.apk"
+        if candidate_apk.exists():
+            android_apk = candidate_apk
+    else:
+        candidate_apk = input_dir / f"Puls_{version}_android.apk"
+        if candidate_apk.exists() and candidate_apk.resolve() != android_apk.resolve():
+            if candidate_apk.is_symlink() or not candidate_apk.is_file() or digest(candidate_apk) != digest(android_apk):
+                raise ReleaseError("duplicate Android APK inputs have different or unsafe contents")
+    apk_pending: tuple[str, Path, Path, str] | None = None
     if android_apk:
-        if not android_apk.is_file() or android_apk.is_symlink():
-            raise ReleaseError("Android APK must be a regular file")
         name = f"Puls_{version}_android.apk"
         dest = output_dir / name
-        if android_apk.resolve() != dest.resolve():
-            if dest.exists() or dest.is_symlink():
-                raise ReleaseError(f"refusing to overwrite unrelated output: {name}")
-            atomic_write(dest, android_apk.read_bytes())
-        files[name] = dest
-        artifacts.append({"os": "android", "arch": "universal", "file": name, "sha256": digest(dest),
+        source_digest = digest(android_apk)
+        old_dest = existing_bytes(dest)
+        if old_dest is not None and android_apk.resolve() != dest.resolve() and hashlib.sha256(old_dest).hexdigest() != source_digest:
+            raise ReleaseError(f"refusing to overwrite unrelated output: {name}")
+        apk_pending = (name, android_apk, dest, source_digest)
+        artifacts.append({"os": "android", "arch": "universal", "file": name, "sha256": source_digest,
                           "kind": "apk", "capabilities": ["gui"]})
-    installers: list[Path] = []
+    installer_destinations: list[tuple[str, Path, bytes, Path]] = []
     for name, source, data in installer_data:
         dest = output_dir / name
-        if source.resolve() != dest.resolve():
-            atomic_write(dest, data)
-        installers.append(dest)
+        old_dest = existing_bytes(dest)
+        if old_dest is not None and source.resolve() != dest.resolve() and old_dest != data:
+            raise ReleaseError(f"refusing to overwrite unrelated output: {name}")
+        installer_destinations.append((name, source, data, dest))
     manifest = {"schema_version": 2, "product": "Puls", "version": version,
                 "assets": sorted(artifacts, key=lambda asset: str(asset["file"]))}
     manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2, separators=(",", ": ")) + "\n").encode()
-    atomic_write(output_dir / MANIFEST, manifest_bytes)
-    checksum_paths = list(files.values()) + [output_dir / MANIFEST] + installers
-    sums = "".join(f"{digest(path)}  {path.name}\n" for path in sorted(checksum_paths, key=lambda p: p.name)).encode("ascii")
-    atomic_write(output_dir / SUMS, sums)
+    manifest_path = output_dir / MANIFEST
+    old_manifest = existing_bytes(manifest_path)
+    if old_manifest is not None and old_manifest != manifest_bytes and not owned_manifest(old_manifest):
+        raise ReleaseError(f"refusing to overwrite unrelated output: {MANIFEST}")
+    checksum_rows = [(name, file_hash) for name, _, _, file_hash in pending_archives]
+    if apk_pending:
+        checksum_rows.append((apk_pending[0], apk_pending[3]))
+    checksum_rows.extend((name, hashlib.sha256(data).hexdigest()) for name, _, data, _ in installer_destinations)
+    checksum_rows.append((MANIFEST, hashlib.sha256(manifest_bytes).hexdigest()))
+    sums = "".join(f"{file_hash}  {name}\n" for name, file_hash in sorted(checksum_rows)).encode("ascii")
+    sums_path = output_dir / SUMS
+    old_sums = existing_bytes(sums_path)
+    if old_sums is not None and old_sums != sums and not owned_checksums(old_sums):
+        raise ReleaseError(f"refusing to overwrite unrelated output: {SUMS}")
+
+    # All inputs and destinations are validated before the first write.
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for name, source, dest, _ in pending_archives:
+        if source.resolve() != dest.resolve() and not dest.exists():
+            atomic_write(dest, source.read_bytes())
+    if apk_pending:
+        name, source, dest, _ = apk_pending
+        if source.resolve() != dest.resolve() and not dest.exists():
+            atomic_write(dest, source.read_bytes())
+    for _, source, data, dest in installer_destinations:
+        if source.resolve() != dest.resolve() and not dest.exists():
+            atomic_write(dest, data)
+    if not manifest_path.exists() or manifest_path.read_bytes() != manifest_bytes:
+        atomic_write(manifest_path, manifest_bytes)
+    if not sums_path.exists() or sums_path.read_bytes() != sums:
+        atomic_write(sums_path, sums)
 
 
 def parser() -> argparse.ArgumentParser:
