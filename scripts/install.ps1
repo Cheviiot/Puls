@@ -121,6 +121,20 @@ function Test-OwnedRuntime {
     return (Get-Content -Raw -LiteralPath $marker).Trim() -ceq "puls-installer-v1:$RuntimeVersion"
 }
 
+function Remove-DirectoryJunction {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "Directory junction does not exist: $Path"
+    }
+    $item = Get-Item -Force -LiteralPath $Path
+    if (-not $item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+        throw "Refusing to remove a non-junction directory as a junction: $Path"
+    }
+    # Windows PowerShell 5.1 Remove-Item can throw a NullReferenceException
+    # on directory junctions. Directory.Delete removes the link itself.
+    [IO.Directory]::Delete($Path)
+}
+
 function Get-OwnedCurrentRuntime {
     param([Parameter(Mandatory = $true)][string]$RuntimeRoot)
     $current = Join-Path $RuntimeRoot "current"
@@ -217,7 +231,7 @@ function Install-RuntimeTree {
         $madeShim = $true
         if ($movedShim) { Remove-Item -Force -LiteralPath $shimBackup -ErrorAction SilentlyContinue }
         if ($movedLegacy) { Remove-Item -Force -LiteralPath $legacyBackup -ErrorAction SilentlyContinue }
-        if ($movedCurrent) { Remove-Item -Force -LiteralPath $currentBackup -ErrorAction SilentlyContinue }
+        if ($movedCurrent) { Remove-DirectoryJunction -Path $currentBackup }
         if ($movedVersion) { Remove-Item -Recurse -Force -LiteralPath $versionBackup -ErrorAction SilentlyContinue }
         foreach ($oldRuntime in Get-ChildItem -Force -Directory -LiteralPath $versions) {
             if ($oldRuntime.Name -ne $RuntimeVersion -and (Test-OwnedRuntime -Path $oldRuntime.FullName -RuntimeVersion $oldRuntime.Name)) {
@@ -234,7 +248,7 @@ function Install-RuntimeTree {
         if (Test-Path -LiteralPath $legacyBackup) { Move-Item -LiteralPath $legacyBackup -Destination $legacyExe | Out-Null }
         if ($madeCurrent -and (Test-Path -LiteralPath $current) -and
             [string]::Equals((Get-OwnedCurrentRuntime -RuntimeRoot $runtimeRoot), [IO.Path]::GetFullPath($versionPath), [StringComparison]::OrdinalIgnoreCase)) {
-            Remove-Item -Force -LiteralPath $current
+            Remove-DirectoryJunction -Path $current
         }
         if ($newVersionInstalled -and (Test-OwnedRuntime -Path $versionPath -RuntimeVersion $RuntimeVersion)) {
             Remove-Item -Recurse -Force -LiteralPath $versionPath
@@ -301,7 +315,7 @@ if ($Uninstall) {
     $current = Join-Path $runtimeRoot "current"
     if ((Test-Path -LiteralPath $current) -and $null -eq $ownedCurrent) { $canRemoveRuntime = $false }
     if ($canRemoveRuntime -and $null -ne $ownedCurrent -and (Test-Path -LiteralPath $current)) {
-        Remove-Item -Force -LiteralPath $current
+        Remove-DirectoryJunction -Path $current
     }
     if ($canRemoveRuntime -and (Test-Path -LiteralPath $versions -PathType Container) -and
         -not (Get-Item -Force -LiteralPath $versions).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {

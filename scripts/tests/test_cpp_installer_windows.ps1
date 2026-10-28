@@ -104,8 +104,15 @@ function Invoke-TestInstaller([string[]]$Arguments) {
     } else {
         $powerShell = Join-Path $PSHOME "powershell.exe"
     }
-    $output = & $powerShell -NoProfile -ExecutionPolicy Bypass -File $installer @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Installer failed: $($output -join [Environment]::NewLine)" }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & $powerShell -NoProfile -ExecutionPolicy Bypass -File $installer @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0) { throw "Installer failed for arguments [$($Arguments -join ' ')]: $($output -join [Environment]::NewLine)" }
     return $output
 }
 
