@@ -18,7 +18,7 @@ if(PULS_BUILD_GUI)
     find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
 endif()
 
-add_library(puls_core STATIC cpp/src/core.cpp cpp/src/backend.cpp)
+add_library(puls_core STATIC cpp/src/core.cpp cpp/src/backend.cpp cpp/src/transfer.cpp)
 target_include_directories(puls_core PUBLIC cpp/include)
 target_link_libraries(puls_core PUBLIC Qt6::Core Qt6::Network Qt6::WebSockets)
 add_library(puls_cli STATIC cpp/src/cli.cpp)
