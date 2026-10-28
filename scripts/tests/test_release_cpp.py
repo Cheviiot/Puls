@@ -95,6 +95,20 @@ class ReleaseCppTests(unittest.TestCase):
             self.assertTrue(link.issym())
             self.assertEqual(link.linkname, "libQt.so")
 
+    def test_cross_directory_and_top_level_internal_symlinks_are_accepted(self):
+        stage = self.stage()
+        (stage / "libexec").mkdir()
+        (stage / "libexec" / "helper").write_bytes(b"helper")
+        (stage / "bin" / "helper").symlink_to("../libexec/helper")
+        (stage / "versions" / "v1").mkdir(parents=True)
+        (stage / "current").symlink_to("versions/v1")
+        entries = release_cpp.collect_stage(stage)
+        links = {name: target for name, _, _, target in entries if target is not None}
+        self.assertEqual(links["bin/helper"], "../libexec/helper")
+        self.assertEqual(links["current"], "versions/v1")
+        archive = release_cpp.create_archive(stage, self.root / "out", "1", "linux", "amd64", False)
+        release_cpp.validate_archive(archive, "Puls_1_linux_amd64", "linux", "amd64")
+
     def test_internal_symlink_chain_is_preserved_but_dangling_and_cycles_fail(self):
         stage = self.stage()
         (stage / "lib" / "alias.so").symlink_to("libQt.so")

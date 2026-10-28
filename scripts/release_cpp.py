@@ -126,7 +126,7 @@ def collect_stage(stage: Path, windows_target: bool = False) -> list[tuple[str, 
                 entries.append((relative, source, mode, None))
             elif stat.S_ISLNK(info.st_mode):
                 target = os.readlink(source)
-                if not safe_link(relative, target, relative.split("/", 1)[0]):
+                if not safe_link(f"_stage/{relative}", target, "_stage"):
                     raise ReleaseError(f"symlink escapes stage: {relative} -> {target}")
                 try:
                     lexical_resolved = (source.parent / target).resolve(strict=False)
