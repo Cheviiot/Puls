@@ -23,7 +23,7 @@ function Get-FileHash256([string]$Path) {
     } finally { $stream.Dispose() }
 }
 
-function New-TestRelease([string]$Version, [string]$Label) {
+function New-TestRelease([string]$Version, [string]$Label, [switch]$IncludeTraversalEntry) {
     $packageName = "Puls_${Version}_windows_amd64"
     $packageRoot = Join-Path $scratch $packageName
     New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot "bin"), (Join-Path $packageRoot "lib"), (Join-Path $packageRoot "plugins"), (Join-Path $packageRoot "assets") | Out-Null
@@ -36,7 +36,37 @@ function New-TestRelease([string]$Version, [string]$Label) {
     $archiveName = "$packageName.zip"
     $archivePath = Join-Path $releases "$Version\$archiveName"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $archivePath) | Out-Null
-    Compress-Archive -Path $packageRoot -DestinationPath $archivePath -Force
+    # Match release_cpp.py's ZIP paths. Compress-Archive on Windows can emit
+    # backslash-separated entry names, which the installer correctly rejects.
+    [void][Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem")
+    $archiveStream = [IO.File]::Open($archivePath, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    $archive = [IO.Compression.ZipArchive]::new($archiveStream, [IO.Compression.ZipArchiveMode]::Create, $true)
+    try {
+        $null = $archive.CreateEntry("$packageName/")
+        foreach ($file in Get-ChildItem -LiteralPath $packageRoot -File -Recurse) {
+            $relativePath = $file.FullName.Substring($packageRoot.Length).TrimStart([char[]]@([char]'\', [char]'/')).Replace('\', '/')
+            $entryName = "$packageName/$relativePath"
+            if ($entryName.Contains('\')) { throw "Test ZIP builder emitted a non-canonical path: $entryName" }
+            $entry = $archive.CreateEntry($entryName, [IO.Compression.CompressionLevel]::Optimal)
+            $sourceStream = [IO.File]::OpenRead($file.FullName)
+            try {
+                $entryStream = $entry.Open()
+                try { $sourceStream.CopyTo($entryStream) }
+                finally { $entryStream.Dispose() }
+            } finally { $sourceStream.Dispose() }
+        }
+        if ($IncludeTraversalEntry) {
+            $entry = $archive.CreateEntry("$packageName/../../escape-from-archive.txt", [IO.Compression.CompressionLevel]::Optimal)
+            $entryStream = $entry.Open()
+            try {
+                $payload = [Text.Encoding]::ASCII.GetBytes("must not be extracted")
+                $entryStream.Write($payload, 0, $payload.Length)
+            } finally { $entryStream.Dispose() }
+        }
+    } finally {
+        $archive.Dispose()
+        $archiveStream.Dispose()
+    }
     $assetHash = Get-FileHash256 $archivePath
     $manifest = @{
         schema_version = 2; product = "Puls"; version = $Version
@@ -81,6 +111,7 @@ try {
     New-TestRelease "1.0.0" "one"
     New-TestRelease "2.0.0" "two"
     New-TestRelease "3.0.0" "three"
+    New-TestRelease "4.0.0" "unsafe" -IncludeTraversalEntry
 
     $portProbe = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $portProbe.Start(); $port = ([Net.IPEndPoint]$portProbe.LocalEndpoint).Port; $portProbe.Stop()
@@ -131,6 +162,17 @@ try {
 
     Invoke-TestInstaller @("-Version", "2.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null
     Assert-CurrentRuntimeVersion -ExpectedVersion "2.0.0" -CurrentPath $current
+
+    try {
+        Invoke-TestInstaller @("-Version", "4.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null
+        throw "Expected traversal archive rejection."
+    } catch {
+        if ($_.Exception.Message -notmatch "unsafe path") { throw }
+    }
+    Assert-CurrentRuntimeVersion -ExpectedVersion "2.0.0" -CurrentPath $current
+    if ((Get-Content -Raw -LiteralPath (Join-Path $installDir "keep.txt")) -ne "user data") {
+        throw "Traversal archive changed unrelated user data."
+    }
     if (Test-Path -LiteralPath (Join-Path $installDir ".puls-runtime\versions\1.0.0")) { throw "Old owned runtime was not cleaned up." }
     Invoke-TestInstaller @("-Version", "2.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null
     Assert-CurrentRuntimeVersion -ExpectedVersion "2.0.0" -CurrentPath $current
