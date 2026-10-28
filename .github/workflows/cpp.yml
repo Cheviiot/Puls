@@ -31,6 +31,7 @@ jobs:
         with:
           version: '6.12.0'
           modules: qtwebsockets
+          aqtversion: '==3.3.0'
           cache: true
       - name: Configure
         run: cmake -S . -B build/cpp -DCMAKE_BUILD_TYPE=Debug -DPULS_BUILD_GUI=ON
@@ -75,6 +76,7 @@ jobs:
         with:
           version: '6.12.0'
           modules: qtwebsockets
+          aqtversion: '==3.3.0'
           cache: true
       - name: Configure
         run: cmake -S . -B build/asan -DCMAKE_BUILD_TYPE=Debug -DPULS_BUILD_GUI=OFF -DPULS_ENABLE_SANITIZERS=ON

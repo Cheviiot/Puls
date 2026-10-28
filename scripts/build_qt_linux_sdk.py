@@ -82,7 +82,13 @@ def extract_source(archive: Path, destination: Path) -> Path:
         raise
 
     source = destination / SOURCE_ROOT
-    required = ("configure", ".cmake.conf", "qtbase/CMakeLists.txt", "qtwebsockets/CMakeLists.txt")
+    required = (
+        "configure",
+        ".cmake.conf",
+        "qtbase/CMakeLists.txt",
+        "qtwebsockets/CMakeLists.txt",
+        "qtwayland/CMakeLists.txt",
+    )
     missing = [name for name in required if not (source / name).is_file()]
     if missing:
         raise BuildError(f"Qt source archive is missing required files: {', '.join(missing)}")
@@ -107,7 +113,8 @@ def build_sdk(source: Path, build_dir: Path, prefix: Path, jobs: int) -> None:
             "-nomake",
             "examples",
             "-submodules",
-            "qtbase,qtwebsockets",
+            "qtbase,qtwebsockets,qtwayland",
+            "-no-feature-gtk3",
             "-openssl-runtime",
         ],
         cwd=build_dir,

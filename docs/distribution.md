@@ -30,9 +30,10 @@ go build -tags nogui ./cmd/puls
 Нативный C++ workflow собирает GUI desktop targets и Windows arm64 CLI с Qt
 6.12.0. Qt 6.12.0 Linux amd64 SDK строится в GitHub Actions из официального
 source archive с проверкой закреплённого SHA-256; конфигурация включает только
-`qtbase` и `qtwebsockets`. Сборка идёт на Ubuntu 22.04/GCC 11 и даёт GLIBC
-2.35 baseline, совместимый с ALT Workstation GLIBC 2.38. Установленный Qt SDK
-хранится в Actions cache; GTK, QML и Wayland не собираются.
+`qtbase`, `qtwebsockets` и `qtwayland`. Сборка идёт на Ubuntu 22.04/GCC 11 и
+даёт GLIBC 2.35 baseline, совместимый с ALT Workstation GLIBC 2.38. Установленный
+Qt SDK хранится в Actions cache. GTK3 явно отключён; Qt Wayland client собирается
+с системными Wayland development packages. QML не требуется для этого SDK.
 
 Для Windows arm64 workflow использует native runner `windows-11-arm`, Qt
 repository host `windows_arm64` и architecture `win64_msvc2022_arm64`.

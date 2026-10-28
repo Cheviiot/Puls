@@ -71,15 +71,16 @@ jobs:
             libxcb-image0-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-render-util0-dev \
             libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev libxcb-util-dev libxcb-xfixes0-dev \
             libxcb-xkb-dev libxcb1-dev libxext-dev libxfixes-dev libxi-dev libxkbcommon-dev \
-            libxkbcommon-x11-dev libxrender-dev
+            libxkbcommon-x11-dev libxrender-dev libwayland-dev wayland-protocols \
+            libwayland-egl1-mesa libwayland-server0 libgles2-mesa-dev
 
       - name: Cache Qt 6.12 Linux amd64 SDK
         id: qt-linux-cache
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
-          path: ~/.cache/puls/qt-6.12.0-linux-amd64-glibc235
-          key: puls-qt-6.12.0-linux-amd64-glibc235-gcc11-98ff4f44bac6ec3e-v1
+          path: ~/.cache/puls/qt-6.12.0-linux-amd64-glibc235-wayland
+          key: puls-qt-6.12.0-linux-amd64-glibc235-wayland-gcc11-98ff4f44bac6ec3e-v2
 
       - name: Build minimal Qt 6.12.0 Linux amd64 SDK from verified sources
         id: qt-linux-source
@@ -89,16 +90,16 @@ jobs:
           python3 scripts/build_qt_linux_sdk.py
           --cache-dir "$HOME/.cache/puls/qt-source-6.12.0"
           --work-dir "$RUNNER_TEMP/puls-qt-6.12.0-build"
-          --prefix "$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235"
+          --prefix "$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235-wayland"
           --jobs 2
 
       - name: Set Qt 6.12.0 Linux amd64 SDK path
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
         shell: bash
         run: |
-          echo "QT_ROOT_DIR=$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235" >> "$GITHUB_ENV"
-          echo "$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235/bin" >> "$GITHUB_PATH"
+          echo "QT_ROOT_DIR=$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235-wayland" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235-wayland" >> "$GITHUB_ENV"
+          echo "$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235-wayland/bin" >> "$GITHUB_PATH"
 
       - name: Install Qt 6.12.0
         if: matrix.os != 'linux' || matrix.arch == 'arm64'
@@ -109,6 +110,7 @@ jobs:
           host: ${{ matrix.qt-host }}
           arch: ${{ matrix.qt-arch }}
           modules: qtwebsockets
+          aqtversion: '==3.3.0'
           cache: true
           set-env: true
 
