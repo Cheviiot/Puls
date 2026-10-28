@@ -3,9 +3,9 @@ name: C++ migration
 on:
   push:
     branches: [main, 'codex/cpp-*']
-    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png', 'scripts/release_cpp.py', 'scripts/tests/**']
+    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png', 'scripts/**']
   pull_request:
-    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png', 'scripts/release_cpp.py', 'scripts/tests/**']
+    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png', 'scripts/**']
   workflow_dispatch:
 
 permissions:
@@ -54,6 +54,16 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s scripts/tests -v
+
+  windows-runtime-installer:
+    name: Qt runtime installer / Windows
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Exercise runtime install, update, rollback and uninstall
+        shell: powershell
+        run: ./scripts/tests/test_cpp_installer_windows.ps1
 
   sanitizers:
     runs-on: ubuntu-24.04

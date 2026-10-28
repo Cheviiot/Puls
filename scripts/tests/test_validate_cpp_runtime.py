@@ -5,6 +5,7 @@ import io
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -93,7 +94,7 @@ class RuntimeValidatorTests(unittest.TestCase):
         with self.assertRaises(runtime.ValidationError):
             runtime.parse_target("linux/mips")
 
-    def test_stage_binary_symlink_must_resolve_inside_stage(self):
+    def test_stage_binary_symlink_is_rejected(self):
         stage = self.root / "stage"
         binary_dir = stage / "bin"
         binary_dir.mkdir(parents=True)
@@ -103,7 +104,7 @@ class RuntimeValidatorTests(unittest.TestCase):
             (binary_dir / "puls").symlink_to(external)
         except OSError:
             self.skipTest("symlinks unavailable")
-        with self.assertRaisesRegex(runtime.ValidationError, "resolves outside"):
+        with self.assertRaisesRegex(runtime.ValidationError, "regular file"):
             runtime.validate_stage(stage, "0.4.0", False, "linux/amd64", self.root)
 
     def test_environment_removes_qt_influences_without_dropping_tools(self):
@@ -173,6 +174,26 @@ class RuntimeValidatorTests(unittest.TestCase):
         self.assertEqual(missing_code, 1)
         self.assertIn('"status":"error"', missing_stderr.getvalue())
         self.assertNotIn("Traceback", missing_stderr.getvalue())
+
+
+    def test_glib_dependencies_and_relocated_paths_with_spaces_are_supported(self):
+        stage = self.root / "relocated runtime"
+        library_dir = stage / "lib"
+        library_dir.mkdir(parents=True)
+        (library_dir / "libglib-2.0.so.0").write_bytes(b"GLib is not GTK")
+        (library_dir / "libgobject-2.0.so.0").write_bytes(b"GObject is not GTK")
+        lines = []
+        for name in runtime._QT_REQUIRED:
+            library = library_dir / f"lib{name}.so.6"
+            library.write_bytes(b"fixture")
+            lines.append(f"lib{name}.so.6 => {library} (0x00001234)")
+        output = subprocess.CompletedProcess([], 0, "\n".join(lines), "")
+        with mock.patch.object(runtime, "_require_tools"), mock.patch.object(runtime, "_run", return_value=output):
+            resolved = runtime._check_linux(stage, stage / "bin" / "puls", False, {})
+            self.assertEqual(set(resolved), set(runtime._QT_REQUIRED))
+            (library_dir / "libgtk-3.so.0").write_bytes(b"GTK")
+            with self.assertRaises(runtime.ValidationError):
+                runtime._check_linux(stage, stage / "bin" / "puls", False, {})
 
 
 if __name__ == "__main__":

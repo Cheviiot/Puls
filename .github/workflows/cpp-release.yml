@@ -39,13 +39,19 @@ jobs:
           # Qt's supported Linux ARM desktop reference is Ubuntu 24.04 on Raspberry Pi 5 (glibc 2.39).
           - {runner: ubuntu-24.04-arm, os: linux, arch: arm64, qt-host: linux_arm64, qt-arch: linux_gcc_arm64, gui: ON}
           - {runner: windows-2022, os: windows, arch: amd64, qt-host: windows, qt-arch: win64_msvc2022_64, gui: ON}
-          # Qt 6.8 supplies MSVC ARM64 binaries; cross-build them on the x64 Windows runner.
-          - {runner: windows-2022, os: windows, arch: arm64, qt-host: windows, qt-arch: win64_msvc2022_arm64, gui: OFF, nogui: true}
+          # Native ARM64 executes the packaged CLI as well as building it.
+          # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+          - {runner: windows-11-arm, os: windows, arch: arm64, qt-host: windows, qt-arch: win64_msvc2022_arm64, gui: OFF, nogui: true}
           - {runner: macos-15-intel, os: darwin, arch: amd64, qt-host: mac, qt-arch: clang_64, gui: ON}
           - {runner: macos-15, os: darwin, arch: arm64, qt-host: mac, qt-arch: clang_64, gui: ON}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
 
       - name: Install Linux deployment tools
         if: matrix.os == 'linux'
@@ -82,9 +88,9 @@ jobs:
           cmake --install build/cpp --config Release --prefix "$PWD/.scratch/stage"
           mv .scratch/stage .scratch/relocated
           if [[ "${{ matrix.gui }}" == "ON" ]]; then
-            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev --gui
+            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}" --gui
           else
-            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev
+            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}"
           fi
 
       - name: Create deterministic archive

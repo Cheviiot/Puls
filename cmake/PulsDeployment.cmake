@@ -19,6 +19,25 @@ foreach(directory IN ITEMS CMAKE_INSTALL_BINDIR CMAKE_INSTALL_LIBDIR
 endforeach()
 
 set(PULS_RUNTIME_PLUGINS_DIR "plugins")
+if(APPLE AND PULS_BUILD_GUI)
+    find_program(PULS_SIPS_EXECUTABLE sips REQUIRED)
+    find_program(PULS_ICONUTIL_EXECUTABLE iconutil REQUIRED)
+    set(puls_bundle_icon "${PROJECT_BINARY_DIR}/Puls.icns")
+    add_custom_command(OUTPUT "${puls_bundle_icon}"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DPULS_ICON_INPUT=${PROJECT_SOURCE_DIR}/internal/gui/assets/Icon.png"
+            "-DPULS_ICON_OUTPUT=${puls_bundle_icon}"
+            "-DPULS_SIPS=${PULS_SIPS_EXECUTABLE}"
+            "-DPULS_ICONUTIL=${PULS_ICONUTIL_EXECUTABLE}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/PulsMacIcon.cmake"
+        DEPENDS "${PROJECT_SOURCE_DIR}/internal/gui/assets/Icon.png"
+            "${PROJECT_SOURCE_DIR}/cmake/PulsMacIcon.cmake"
+        VERBATIM)
+    set_source_files_properties("${puls_bundle_icon}" PROPERTIES GENERATED TRUE
+        MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(puls PRIVATE "${puls_bundle_icon}")
+    set_target_properties(puls PROPERTIES MACOSX_BUNDLE_ICON_FILE Puls.icns)
+endif()
 if(UNIX AND NOT APPLE)
     find_program(PULS_PATCHELF_EXECUTABLE patchelf REQUIRED)
     file(RELATIVE_PATH puls_library_path "/${CMAKE_INSTALL_BINDIR}" "/${CMAKE_INSTALL_LIBDIR}")

@@ -160,6 +160,8 @@ def executable_path(stage: Path, target_os: str) -> Path:
         candidates = [stage / "bin" / ("puls.exe" if target_os == "windows" else "puls")]
     for candidate in candidates:
         if candidate.is_file():
+            if candidate.is_symlink():
+                raise ValidationError("staged executable must be a regular file, not a symlink")
             if target_os != "windows" and not os.access(candidate, os.X_OK):
                 raise ValidationError("staged executable does not have executable permission")
             return candidate.resolve(strict=True)
@@ -320,7 +322,7 @@ def _check_linux(stage: Path, binary: Path, gui: bool, env: dict[str, str]) -> d
     _require_tools("ldd")
     for item in stage.rglob("*"):
         name = item.name.lower()
-        if (name.startswith(("libgtk", "libgdk", "libglib", "libgobject", "ld-linux", "ld64.so", "libnss_")) or
+        if (name.startswith(("libgtk", "libgdk", "ld-linux", "ld64.so", "libnss_")) or
                 name in ("libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1",
                          "libresolv.so.2", "libutil.so.1", "libanl.so.1")):
             raise ValidationError("stage bundles a system GTK, glibc, or loader library")
@@ -330,10 +332,15 @@ def _check_linux(stage: Path, binary: Path, gui: bool, env: dict[str, str]) -> d
     required = list(_QT_REQUIRED) + (list(_QT_GUI) if gui else [])
     resolved: dict[str, str] = {}
     for name in required:
-        match = re.search(rf"(^|\s)lib{re.escape(name)}\.so(?:\.\d+)*\s+=>\s+(\S+)", result.stdout, re.MULTILINE)
-        if not match or match.group(2) == "not":
+        library_path = None
+        for line in result.stdout.splitlines():
+            soname, separator, destination = line.partition("=>")
+            if separator and re.fullmatch(rf"lib{re.escape(name)}\.so(?:\.\d+)*", soname.strip()):
+                library_path = re.sub(r"\s+\(0x[0-9a-fA-F]+\)\s*$", "", destination).strip()
+                break
+        if not library_path or not Path(library_path).is_absolute():
             raise ValidationError(f"staged {name} library did not resolve")
-        path = Path(match.group(2))
+        path = Path(library_path)
         if not is_within(stage, path):
             raise ValidationError(f"staged {name} library resolves outside the relocated stage")
         resolved[name] = str(path.resolve(strict=False))

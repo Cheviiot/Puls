@@ -168,6 +168,12 @@ int main(int argc, char** argv) {
     }
     if (config.command == puls::Command::GUI) {
 #ifdef PULS_BUILD_GUI
+#ifdef Q_OS_WIN
+        DWORD consoleProcesses[2]{};
+        if (GetConsoleProcessList(consoleProcesses, 2) == 1 &&
+            consoleProcesses[0] == GetCurrentProcessId())
+            FreeConsole();
+#endif
         return puls::runGUI(argc, argv, config);
 #else
         errorOutput(QStringLiteral("графический интерфейс недоступен в этой сборке\n"));
