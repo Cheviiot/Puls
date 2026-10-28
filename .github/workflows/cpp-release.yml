@@ -1,0 +1,142 @@
+name: C++ desktop packaging
+
+on:
+  push:
+    branches: ['codex/cpp-*']
+    paths:
+      - 'cpp/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'scripts/**'
+      - '.github/workflows/cpp-release.yml'
+  pull_request:
+    paths:
+      - 'cpp/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'scripts/**'
+      - '.github/workflows/cpp-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package ${{ matrix.os }}/${{ matrix.arch }}${{ matrix.nogui && ' CLI' || ' GUI' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Qt 6.8 Linux binaries target glibc 2.28. Jammy therefore gives amd64 a glibc 2.35 baseline.
+          - {runner: ubuntu-22.04, os: linux, arch: amd64, qt-host: linux, qt-arch: linux_gcc_64, gui: ON}
+          # Qt's supported Linux ARM desktop reference is Ubuntu 24.04 on Raspberry Pi 5 (glibc 2.39).
+          - {runner: ubuntu-24.04-arm, os: linux, arch: arm64, qt-host: linux_arm64, qt-arch: linux_gcc_arm64, gui: ON}
+          - {runner: windows-2022, os: windows, arch: amd64, qt-host: windows, qt-arch: win64_msvc2022_64, gui: ON}
+          # Qt 6.8 supplies MSVC ARM64 binaries; cross-build them on the x64 Windows runner.
+          - {runner: windows-2022, os: windows, arch: arm64, qt-host: windows, qt-arch: win64_msvc2022_arm64, gui: OFF, nogui: true}
+          - {runner: macos-15-intel, os: darwin, arch: amd64, qt-host: mac, qt-arch: clang_64, gui: ON}
+          - {runner: macos-15, os: darwin, arch: arm64, qt-host: mac, qt-arch: clang_64, gui: ON}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install Linux deployment tools
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes patchelf libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.8.3'
+          host: ${{ matrix.qt-host }}
+          arch: ${{ matrix.qt-arch }}
+          modules: qtwebsockets
+          cache: true
+
+      - name: Configure Release
+        shell: bash
+        run: >-
+          cmake -S . -B build/cpp -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DPULS_DEPLOY_RUNTIME=ON
+          -DPULS_BUILD_GUI=${{ matrix.gui }}
+          -DPULS_VERSION_LABEL=0.4.0-cpp-dev
+          ${{ matrix.os == 'windows' && matrix.arch == 'arm64' && '-A ARM64' || '' }}
+
+      - name: Build Release
+        shell: bash
+        run: cmake --build build/cpp --config Release --parallel 2
+
+      - name: Install, relocate, and validate runtime
+        shell: bash
+        run: |
+          cmake --install build/cpp --config Release --prefix "$PWD/.scratch/stage"
+          mv .scratch/stage .scratch/relocated
+          if [[ "${{ matrix.gui }}" == "ON" ]]; then
+            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev --gui
+          else
+            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev
+          fi
+
+      - name: Create deterministic archive
+        shell: bash
+        run: |
+          if [[ "${{ matrix.nogui || false }}" == "true" ]]; then
+            python scripts/release_cpp.py package --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}" --stage .scratch/relocated --output .scratch/archives --nogui
+          else
+            python scripts/release_cpp.py package --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}" --stage .scratch/relocated --output .scratch/archives
+          fi
+
+      - name: Upload target archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cpp-desktop-${{ matrix.os }}-${{ matrix.arch }}
+          path: .scratch/archives/Puls_0.4.0-cpp-dev_${{ matrix.os }}_${{ matrix.arch }}.*
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble:
+    name: Assemble unsigned CI package set
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download all six target archives
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v8.0.1
+        with:
+          pattern: cpp-desktop-*
+          path: .scratch/archives
+          merge-multiple: true
+
+      - name: Assemble manifest, checksums, and installers
+        run: >-
+          python3 scripts/release_cpp.py assemble
+          --version 0.4.0-cpp-dev
+          --input .scratch/archives
+          --output .scratch/assembled
+          --install-sh scripts/install.sh
+          --install-ps1 scripts/install.ps1
+
+      - name: Verify checksums
+        working-directory: .scratch/assembled
+        run: sha256sum -c SHA256SUMS.txt
+
+      - name: Upload complete unsigned package set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: puls-cpp-desktop-0.4.0-cpp-dev
+          path: .scratch/assembled/*
+          if-no-files-found: error
+          retention-days: 14
