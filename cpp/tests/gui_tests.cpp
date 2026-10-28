@@ -72,6 +72,7 @@ struct State {
     bool block = false;
     bool fail = false;
     bool blockSelection = false;
+    bool streamProgress = false;
     QThread* guiThread = nullptr;
     std::atomic_int created{0};
     std::atomic_int destroyed{0};
@@ -129,6 +130,18 @@ public:
         auto phase = puls::emptyPhase("ok");
         phase.insert("mbps", 420.5);
         return phase;
+    }
+
+    QJsonObject download(const puls::Config& request, const puls::Cancellation& cancellation,
+                         puls::Observer progress) override {
+        if (!state_->streamProgress) return download(request, cancellation);
+        audit();
+        progress({{"mbps", 42.5}, {"bytes", 1000000}, {"elapsed_ms", 1500}, {"active", 2}});
+        QElapsedTimer elapsed;
+        elapsed.start();
+        while (!cancellation.canceled() && elapsed.elapsed() < 3000) QThread::msleep(1);
+        puls::checkCanceled(cancellation, "download");
+        return download(request, cancellation);
     }
 
     QJsonObject upload(const puls::Config&, const puls::Cancellation& cancellation) override {
@@ -219,6 +232,37 @@ void testSuccessAndAffinity() {
         settle();
         assertControlsVisible(window.get());
     }
+    window->close();
+    settle();
+}
+
+void testThroughputProgressAndStop() {
+    clearPreferences();
+    const auto backend = state();
+    backend->streamProgress = true;
+    auto request = config();
+    request.only = "download";
+    std::unique_ptr<QWidget> window(puls::createMainWindow(request, factory(backend)));
+    window->resize(360, 294);
+    window->show();
+    settle();
+    auto* start = control<QPushButton>(window.get(), "startButton");
+    start->click();
+    expect(until([&] {
+        return control<QLabel>(window.get(), "result_yandex_download")->text() == QStringLiteral("42.50 Мбит/с");
+    }), "confirmed transfer progress reaches the active metric");
+    auto* progress = control<QProgressBar>(window.get(), "phaseProgress");
+    expect(progress->maximum() == request.durationSeconds * 1000 && progress->value() == 1500,
+           "throughput progress uses measured elapsed time and configured duration");
+    assertControlsVisible(window.get());
+    QElapsedTimer stop;
+    stop.start();
+    start->click();
+    expect(until([&] { return backend->destroyed.load() == 1 && start->isEnabled(); }),
+           "active throughput can be stopped from the compact GUI");
+    expect(stop.elapsed() < 1000, "throughput stop returns the GUI within one second");
+    expect(control<QLabel>(window.get(), "result_yandex_download")->text() == QStringLiteral("Остановлено"),
+           "canceled throughput replaces the provisional rate");
     window->close();
     settle();
 }
@@ -435,6 +479,7 @@ int main(int argc, char** argv) {
     QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, scratch.path());
     try {
         testSuccessAndAffinity();
+        testThroughputProgressAndStop();
         testStopAndRestart();
         testCloseAndDestructionCancel();
         testPrivatePreferences();

@@ -32,6 +32,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace puls {
@@ -837,11 +838,23 @@ private:
         if (kind == "phase_started") {
             if (cancellation_ && cancellation_->canceled()) return;
             status_->setText(displayName(id) + QStringLiteral(" · ") + phaseName(phase));
-            if (phase == "select") progress_->setRange(0, 0);
+            if (phase == "select" || phase == "download" || phase == "upload") progress_->setRange(0, 0);
             else {
                 progress_->setRange(0, 3);
                 progress_->setValue(phase == "ping" ? 0 : phase == "download" ? 1 : 2);
             }
+            queueAdapt();
+        } else if (kind == "throughput_progress") {
+            if (!cancellation_ || cancellation_->canceled() || !rows_.contains(id) ||
+                (phase != "download" && phase != "upload")) return;
+            const auto throughput = event.value("throughput").toObject();
+            const double rate = throughput.value("mbps").toDouble(-1);
+            const double elapsed = throughput.value("elapsed_ms").toDouble(-1);
+            if (!std::isfinite(rate) || rate < 0 || !std::isfinite(elapsed) || elapsed < 0) return;
+            auto* label = phase == "download" ? rows_[id].download : rows_[id].upload;
+            label->setText(QStringLiteral("%1 Мбит/с").arg(rate, 0, 'f', 2));
+            progress_->setRange(0, config_.durationSeconds * 1000);
+            progress_->setValue(static_cast<int>(std::min(elapsed, static_cast<double>(progress_->maximum()))));
             queueAdapt();
         } else if (kind == "server_selected") serverResult(id, event.value("server").toObject());
         else if (kind == "phase_completed") phaseResult(id, phase, event.value("phase_result").toObject());

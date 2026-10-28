@@ -253,8 +253,13 @@ QJsonObject Runner::run(const Config& config, const Cancellation& cancellation, 
                         throw OpError("canceled", phase, QStringLiteral("операция отменена"));
                     checkCanceled(cancellation, phase);
                     if (phase == "ping") value = retry(cancellation, phase, [&] { return backend->ping(config, cancellation); });
-                    else if (phase == "download") value = backend->download(config, cancellation);
-                    else value = backend->upload(config, cancellation);
+                    else {
+                        auto progress = [&](const QJsonObject& throughput) {
+                            emitEvent("throughput_progress", {{"service", id}, {"phase", phase}, {"throughput", throughput}});
+                        };
+                        value = phase == "download" ? backend->download(config, cancellation, progress)
+                                                    : backend->upload(config, cancellation, progress);
+                    }
                     if (value.value("status") == "ok") {
                         const auto measured = value.value(phase == "ping" ? "value_ms" : "mbps");
                         if (!measured.isDouble() || !std::isfinite(measured.toDouble()) || measured.toDouble() < 0)

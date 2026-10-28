@@ -52,6 +52,7 @@ QString displayName(const QString& service);
 Config parseConfig(const QStringList& args);
 QString helpText();
 QString versionText();
+using Observer = std::function<void(const QJsonObject&)>;
 
 // All network objects must be constructed and destroyed in the calling thread.
 // A backend is owned by exactly one Runner invocation; credentials stay in memory.
@@ -63,11 +64,16 @@ public:
     virtual QJsonObject ping(const Config&, const Cancellation&) = 0;
     virtual QJsonObject download(const Config&, const Cancellation&) = 0;
     virtual QJsonObject upload(const Config&, const Cancellation&) = 0;
+    virtual QJsonObject download(const Config& config, const Cancellation& cancellation, Observer) {
+        return download(config, cancellation);
+    }
+    virtual QJsonObject upload(const Config& config, const Cancellation& cancellation, Observer) {
+        return upload(config, cancellation);
+    }
     virtual QJsonObject connection(const Cancellation&) = 0;
 };
 
 using BackendFactory = std::function<std::unique_ptr<Backend>(const QString&)>;
-using Observer = std::function<void(const QJsonObject&)>;
 std::unique_ptr<Backend> makeBackend(const QString& service);
 
 class Runner {
