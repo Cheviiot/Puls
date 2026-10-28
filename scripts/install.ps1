@@ -489,7 +489,8 @@ try {
     }
 
     $extractDir = Join-Path $temporaryDir "extracted"
-    [void][Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem")
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archiveReader = [IO.Compression.ZipFile]::OpenRead($archivePath)
     try {
         $expectedRoot = "Puls_${Version}_windows_${targetArch}/"

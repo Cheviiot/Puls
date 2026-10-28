@@ -4,6 +4,8 @@ $ErrorActionPreference = "Stop"
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw "This integration test must run on Windows."
 }
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $installer = Join-Path $repoRoot "scripts\install.ps1"
@@ -40,7 +42,6 @@ function New-TestRelease([string]$Version, [string]$Label, [switch]$IncludeTrave
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $archivePath) | Out-Null
     # Match release_cpp.py's ZIP paths. Compress-Archive on Windows can emit
     # backslash-separated entry names, which the installer correctly rejects.
-    [void][Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem")
     $archiveStream = [IO.File]::Open($archivePath, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     $archive = $null
     try {
