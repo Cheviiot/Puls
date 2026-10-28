@@ -39,6 +39,9 @@ public:
     QString phase;
     QString message;
     bool retryable;
+    // Confirmed transfer diagnostics survive a failed/canceled phase. This is
+    // internal data; json() exposes only the stable error envelope.
+    QJsonObject transferDiagnostics;
     OpError(QString code, QString phase, QString message, bool retryable = false);
     QJsonObject json() const;
 };

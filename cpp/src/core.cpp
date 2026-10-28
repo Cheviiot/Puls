@@ -33,6 +33,8 @@ QJsonObject emptyPhase(const QString& status) {
 
 QJsonObject failedPhase(const OpError& error) {
     auto result = emptyPhase(error.code == "canceled" ? "canceled" : "error");
+    for (const auto* key : {"bytes", "elapsed_ms", "successful_streams", "failed_streams", "warnings"})
+        if (error.transferDiagnostics.contains(key)) result.insert(key, error.transferDiagnostics.value(key));
     result.insert("error", error.json());
     return result;
 }

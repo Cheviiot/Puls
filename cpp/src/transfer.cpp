@@ -270,7 +270,8 @@ RunResult run(const RunConfig& config, const Cancellation& cancellation,
             }
         } catch (const OpError& error) { failure = error; }
           catch (...) { failure.emplace("internal", phase, QStringLiteral("не удалось выполнить передачу данных")); }
-        if (measurementStart != TimePoint{} && measurementFinish == TimePoint{}) measurementFinish = Clock::now();
+        if (measurementStart != TimePoint{} && measurementFinish == TimePoint{})
+            measurementFinish = std::min(Clock::now(), measurementStart + config.duration);
         // Freeze accounting before the join; slow transport cleanup must not
         // lower the measured speed or extend the measurement window.
         shared.stop.store(true);
@@ -298,18 +299,26 @@ RunResult run(const RunConfig& config, const Cancellation& cancellation,
 }
 
 QJsonObject phaseResult(const RunResult& result, const QString& method) {
-    if (result.error) throw *result.error;
-    if (result.bytes <= 0 || result.workersOK <= 0 || result.elapsedSeconds <= 0 || !std::isfinite(result.elapsedSeconds))
-        throw OpError("protocol", "transfer", QStringLiteral("передача завершилась без подтверждённых данных"));
+    // Schema 1 uses method for the ping statistic; throughput keeps it null.
+    Q_UNUSED(method);
     auto phase = emptyPhase("ok");
-    phase.insert("method", method);
-    phase.insert("bytes", result.bytes);
-    phase.insert("elapsed_ms", std::round(result.elapsedSeconds * 100000) / 100);
-    phase.insert("mbps", std::round(mbps(result.bytes, result.elapsedSeconds) * 100) / 100);
-    phase.insert("successful_streams", result.workersOK);
-    phase.insert("failed_streams", result.workersFailed);
+    if (result.bytes > 0 || result.elapsedSeconds > 0 || result.workersOK > 0 || result.workersFailed > 0) {
+        phase.insert("bytes", result.bytes);
+        phase.insert("successful_streams", result.workersOK);
+        phase.insert("failed_streams", result.workersFailed);
+    }
+    if (result.elapsedSeconds > 0 && std::isfinite(result.elapsedSeconds))
+        phase.insert("elapsed_ms", std::round(result.elapsedSeconds * 100000) / 100);
     if (!result.workerErrors.isEmpty()) phase.insert("warnings", QJsonArray{
         QStringLiteral("сетевые сбои отдельных потоков: %1").arg(result.workerErrors.size())});
+    if (result.error) {
+        auto error = *result.error;
+        error.transferDiagnostics = phase;
+        throw error;
+    }
+    if (result.bytes <= 0 || result.workersOK <= 0 || result.elapsedSeconds <= 0 || !std::isfinite(result.elapsedSeconds))
+        throw OpError("protocol", "transfer", QStringLiteral("передача завершилась без подтверждённых данных"));
+    phase.insert("mbps", std::round(mbps(result.bytes, result.elapsedSeconds) * 100) / 100);
     return phase;
 }
 

@@ -2,6 +2,7 @@
 #include "puls/network.hpp"
 
 #include <QCoreApplication>
+#include <QEventLoop>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -483,9 +484,12 @@ public:
             while (hasPendingConnections()) {
                 auto* socket = nextPendingConnection();
                 auto request = std::make_shared<QByteArray>();
-                connect(socket, &QTcpSocket::readyRead, socket, [this, socket, request] {
+                auto handled = std::make_shared<bool>(false);
+                connect(socket, &QTcpSocket::readyRead, socket, [this, socket, request, handled] {
+                    if (*handled) { socket->readAll(); return; }
                     request->append(socket->readAll());
                     if (!request->contains("\r\n\r\n")) return;
+                    *handled = true;
                     const auto firstLine = request->left(request->indexOf("\r\n"));
                     const auto response = handler_(firstLine);
                     if (response.holdOpen) return;
@@ -606,6 +610,88 @@ QJsonObject yandexDiscovery(const QString& origin, bool externalLatency = false)
              {"statsUrl", origin + QStringLiteral("/internet/stats")},
              {"size", 1024}, {"timeout", 0}}}}}},
     };
+}
+
+QJsonObject runBackendWithEvents(const puls::Config& request, const puls::BackendOptions& options) {
+    puls::Cancellation cancellation;
+    std::atomic_bool finished{false};
+    QJsonObject envelope;
+    std::thread worker([&] {
+        puls::Runner runner([&](const QString& id) { return puls::makeBackendForTesting(id, options); });
+        envelope = runner.run(request, cancellation);
+        finished.store(true);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!finished.load() && std::chrono::steady_clock::now() < deadline) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        QThread::msleep(1);
+    }
+    if (!finished.load()) cancellation.cancel();
+    worker.join();
+    expect(envelope.value("status") != "canceled", "backend integration mock completes before its timeout");
+    return envelope;
+}
+
+void testRunnerRoutesNativeThroughputAfterDiscovery() {
+    QByteArray discovery;
+    int downloadRequests = 0, uploadRequests = 0;
+    LocalHttpServer server([&](const QByteArray& line) {
+        if (line.startsWith("GET /internet/api/v0/get-probes?"))
+            return LocalHttpServer::Response{"200 OK", "application/json", discovery};
+        if (line.startsWith("GET /internet/ping?"))
+            return LocalHttpServer::Response{"200 OK", "text/plain", "ok"};
+        if (line.startsWith("GET /internet/probes/50mb?")) ++downloadRequests;
+        if (line.startsWith("POST /internet/post?")) ++uploadRequests;
+        return LocalHttpServer::Response{"503 Service Unavailable", "text/plain", "mock unavailable"};
+    });
+    discovery = QJsonDocument(yandexDiscovery(server.baseUrl().toString())).toJson(QJsonDocument::Compact);
+    auto options = localBackendOptions(server.baseUrl());
+    options.transferDuration = std::chrono::milliseconds(40);
+    options.transferWarmup = std::chrono::milliseconds(0);
+    options.transferReadyGrace = std::chrono::milliseconds(0);
+    options.transferStartupTimeout = std::chrono::milliseconds(1000);
+    auto request = measureConfig("yandex", "all");
+    request.connections = 1;
+    const auto envelope = runBackendWithEvents(request, options);
+    const auto phases = resultAt(envelope).value("phases").toObject();
+    expect(downloadRequests == 2 && uploadRequests == 2,
+           "Yandex backend retains discovery URLs and routes both transfers with one reconnect");
+    expect(phases.value("ping").toObject().value("status") == "ok" && envelope.value("status") == "partial",
+           "throughput failure preserves the successful native ping");
+    for (const auto* phase : {"download", "upload"}) {
+        const auto value = phases.value(phase).toObject();
+        expect(value.value("status") == "error" && value.value("mbps").isNull(),
+               "failed native transfer has no invented zero speed");
+    }
+}
+
+void testRunnerRoutesExplicitQmsThroughput() {
+    int tokens = 0, transfers = 0;
+    LocalHttpServer server([&](const QByteArray& line) {
+        if (line.startsWith("POST /api/server/gentoken?")) {
+            ++tokens;
+            return LocalHttpServer::Response{"200 OK", "application/json", "{\"token\":\"mock-header.mock-payload.mock-signature\"}"};
+        }
+        if (line.startsWith("GET /download.php?") || line.startsWith("POST /upload.php?")) ++transfers;
+        return LocalHttpServer::Response{"503 Service Unavailable", "text/plain", "mock unavailable"};
+    });
+    auto options = localBackendOptions(server.baseUrl());
+    options.transferDuration = std::chrono::milliseconds(40);
+    options.transferWarmup = std::chrono::milliseconds(0);
+    options.transferReadyGrace = std::chrono::milliseconds(0);
+    options.transferStartupTimeout = std::chrono::milliseconds(1000);
+    for (const auto* phase : {"download", "upload"}) {
+        auto request = measureConfig("speedtest", phase);
+        request.server = server.baseUrl().authority();
+        request.explicitService = true;
+        request.connections = 1;
+        const auto envelope = runBackendWithEvents(request, options);
+        const auto value = resultAt(envelope).value("phases").toObject().value(phase).toObject();
+        expect(value.value("status") == "error" && value.value("mbps").isNull(),
+               "QMS transfer failure stays typed and has no numeric speed");
+    }
+    expect(tokens == 2 && transfers == 4,
+           "explicit QMS backend uses JWT POST and routes both transfer methods to the selected host");
 }
 
 void testYandexBackendDiscoversAgainstLoopbackMock() {
@@ -978,6 +1064,8 @@ int main(int argc, char** argv) {
     testRunnerMarksOnlyRequestedPhasesCanceled();
     testRunnerAggregatesUniquePhaseWarnings();
     testYandexBackendDiscoversAgainstLoopbackMock();
+    testRunnerRoutesNativeThroughputAfterDiscovery();
+    testRunnerRoutesExplicitQmsThroughput();
     testYandexDiscoveryRejectsExternalInsecureProbeURL();
     testYandexConnectionParsesBoundedBootstrapIP();
     testSpeedtestConnectionUsesIPThenOptionalASNEndpoints();

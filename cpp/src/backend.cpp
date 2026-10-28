@@ -1,5 +1,6 @@
 #include "puls/core.hpp"
 #include "puls/network.hpp"
+#include "puls/transfer_network.hpp"
 
 #include <QElapsedTimer>
 #include <QDateTime>
@@ -28,7 +29,6 @@
 namespace puls {
 namespace {
 constexpr auto userAgent = "Mozilla/5.0 (compatible; Puls; +https://github.com/Cheviiot/Puls)";
-constexpr auto browserKey = "5f3287b55fbcd8076919114885f8f3f7";
 constexpr qsizetype maxYandexDiscovery = 2 * 1024 * 1024;
 constexpr qsizetype maxYandexPage = 8 * 1024 * 1024;
 constexpr qsizetype maxSpeedDiscovery = 4 * 1024 * 1024;
@@ -248,11 +248,6 @@ QString normalizeHost(QString host) {
     return hostname.contains(':') ? QStringLiteral("[%1]:%2").arg(hostname).arg(portNumber) : hostname + QStringLiteral(":%1").arg(portNumber);
 }
 
-bool sameOrigin(const QUrl& a, const QUrl& b) {
-    const auto effectivePort = [](const QUrl& url) { return url.port(url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0 ? 443 : 80); };
-    return a.scheme().compare(b.scheme(), Qt::CaseInsensitive) == 0 &&
-        a.host().compare(b.host(), Qt::CaseInsensitive) == 0 && effectivePort(a) == effectivePort(b);
-}
 
 bool validIp(QString value, QString* normalized = nullptr) {
     QHostAddress address;
@@ -272,6 +267,7 @@ bool validIp(QString value, QString* normalized = nullptr) {
 struct YandexProbeSet {
     QStringList latency;
     QStringList download;
+    QList<YandexUploadProbe> upload;
     QString host;
 };
 
@@ -324,7 +320,9 @@ public:
             for (const auto& value : up.toArray()) {
                 if (!value.isObject()) fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("неверная upload-проба"), true);
                 const auto item = value.toObject();
-                if (!item.value("size").isDouble() || item.value("size").toInt() <= 0)
+                const auto size = item.value("size");
+                if (!size.isDouble() || size.toDouble() != std::floor(size.toDouble()) ||
+                    size.toDouble() <= 0 || size.toDouble() > (1LL << 30))
                     fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("неверный размер upload-пробы"), true);
                 const QString raw = item.value("url").toString(), post = item.value("postUrl").toString(), stats = item.value("statsUrl").toString();
                 checkedUrl(raw, QStringLiteral("https"), QStringLiteral("select"), options_.allowLoopbackHTTP);
@@ -351,6 +349,7 @@ public:
                 if (item.value("timeout").toInt(0) == 0) {
                     if (upHosts.contains(host)) fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("повторяющийся CDN upload-пробы"), true);
                     upHosts.insert(host);
+                    set.upload.append({QUrl(post), QUrl(ws), item.value("websocketConnectionTimeout").toInt(0)});
                 }
             }
             if (set.latency.isEmpty() || set.download.isEmpty() || upHosts.isEmpty() || latHosts != downHosts || latHosts != upHosts)
@@ -485,8 +484,20 @@ public:
         return phase;
     }
 
-    QJsonObject download(const Config&, const Cancellation&) override { unavailable(QStringLiteral("download")); }
-    QJsonObject upload(const Config&, const Cancellation&) override { unavailable(QStringLiteral("upload")); }
+    QJsonObject download(const Config& config, const Cancellation& cancellation) override {
+        return download(config, cancellation, {});
+    }
+    QJsonObject upload(const Config& config, const Cancellation& cancellation) override {
+        return upload(config, cancellation, {});
+    }
+    QJsonObject download(const Config& config, const Cancellation& cancellation, Observer progress) override {
+        QList<QUrl> urls;
+        for (const auto& url : probes_.download) urls.append(QUrl(url));
+        return yandexDownload(config, cancellation, options_, urls, std::move(progress));
+    }
+    QJsonObject upload(const Config& config, const Cancellation& cancellation, Observer progress) override {
+        return yandexUpload(config, cancellation, options_, probes_.upload, std::move(progress));
+    }
 
     QJsonObject connection(const Cancellation& cancellation) override {
         try {
@@ -519,9 +530,6 @@ public:
     }
 private:
     int remaining(int requested) const { return std::max(1, requested - static_cast<int>(phaseClock_.elapsed())); }
-    [[noreturn]] void unavailable(const QString& phase) {
-        fail(id(), phase, QStringLiteral("unavailable"), QStringLiteral("пропускная способность ещё не перенесена в C++ backend"));
-    }
     QNetworkAccessManager manager_;
     BackendOptions options_;
     YandexProbeSet probes_;
@@ -548,7 +556,7 @@ public:
                 return serverJson(selected_);
             }
             const auto url = options_.speedtestBase.resolved(QUrl(QStringLiteral("/api/nearest_servers?t=") + QString::number(QDateTime::currentMSecsSinceEpoch())));
-            auto key = browserKey_;
+            auto key = session_.browserKey;
             auto request = requestFor(url);
             request.setRawHeader("x-api-key", key.toUtf8());
             auto response = perform(manager_, request, maxSpeedDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
@@ -617,12 +625,22 @@ public:
             fail(id(), QStringLiteral("ping"), lastCode, QStringLiteral("QMS ping завершился с ошибкой"), lastCode != QStringLiteral("canceled") && lastCode != QStringLiteral("protocol"));
         } catch (const OpError&) { throw; }
     }
-    QJsonObject download(const Config&, const Cancellation&) override { unavailable(QStringLiteral("download")); }
-    QJsonObject upload(const Config&, const Cancellation&) override { unavailable(QStringLiteral("upload")); }
+    QJsonObject download(const Config& config, const Cancellation& cancellation) override {
+        return download(config, cancellation, {});
+    }
+    QJsonObject upload(const Config& config, const Cancellation& cancellation) override {
+        return upload(config, cancellation, {});
+    }
+    QJsonObject download(const Config& config, const Cancellation& cancellation, Observer progress) override {
+        return speedtestDownload(config, cancellation, options_, measurementServers("download"), session_, std::move(progress));
+    }
+    QJsonObject upload(const Config& config, const Cancellation& cancellation, Observer progress) override {
+        return speedtestUpload(config, cancellation, options_, measurementServers("upload"), session_, std::move(progress));
+    }
     QJsonObject connection(const Cancellation& cancellation) override {
         try {
             phaseClock_.start();
-            QString key = browserKey_;
+            QString key = session_.browserKey;
             auto fetch = [&](const QString& path, const QString& currentKey) {
                 auto req = requestFor(options_.speedtestBase.resolved(QUrl(path + QStringLiteral("?t=") + QString::number(QDateTime::currentMSecsSinceEpoch()))));
                 req.setRawHeader("x-api-key", currentKey.toUtf8());
@@ -667,8 +685,17 @@ private:
     static QJsonObject serverJson(const QmsServer& server) {
         return {{"name", server.host}, {"city", server.city.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(server.city)}, {"region", server.region.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(server.region)}};
     }
-    [[noreturn]] void unavailable(const QString& phase) {
-        fail(id(), phase, QStringLiteral("unavailable"), QStringLiteral("пропускная способность ещё не перенесена в C++ backend"));
+    QList<QUrl> measurementServers(const QString& phase) const {
+        if (selected_.host.isEmpty()) fail(id(), phase, "internal", QStringLiteral("сначала выберите сервер"));
+        QList<QUrl> urls;
+        auto append = [&](const QString& host) {
+            QUrl url(QStringLiteral("https://") + host + '/');
+            if (options_.allowLoopbackHTTP && isLoopback(url.host())) url.setScheme("http");
+            if (!urls.contains(url)) urls.append(url);
+        };
+        append(selected_.host);
+        for (const auto& candidate : candidates_) append(candidate.host);
+        return urls;
     }
     bool probe(const QString& host, int count, const Cancellation& cancellation, QList<double>* samples,
                const QString& phase, QString* failureCode = nullptr,
@@ -820,30 +847,7 @@ private:
         return responsive;
     }
     QString refreshKey(const Cancellation& cancellation, const QString& phase) {
-        if (keyRefreshAttempted_) fail(id(), phase, QStringLiteral("auth"), QStringLiteral("browser key уже обновлялся"));
-        keyRefreshAttempted_ = true;
-        auto page = perform(manager_, requestFor(options_.speedtestBase, "text/html"), maxYandexPage, remaining(15000), cancellation, phase);
-        ensureHttp(page, id(), phase, QStringLiteral("страница speedtest.ru"), QStringLiteral("text/html"));
-        const QRegularExpression assets(QStringLiteral("src=[\\\"']([^\\\"']+\\.js[^\\\"']*)[\\\"']"));
-        const auto matches = assets.globalMatch(QString::fromUtf8(page.body));
-        int count = 0;
-        const QUrl origin = options_.speedtestBase;
-        QRegularExpression keyPattern(QStringLiteral("QMSLibrary\\(\\{\\s*id\\s*:\\s*[\\\"']([A-Za-z0-9_-]{16,128})[\\\"']"));
-        auto it = matches;
-        while (it.hasNext() && count++ < 32) {
-            const auto match = it.next();
-            const auto url = origin.resolved(QUrl(match.captured(1)));
-            if (!sameOrigin(origin, url)) continue;
-            auto asset = perform(manager_, requestFor(url, "*/*"), maxYandexPage, remaining(10000), cancellation, phase);
-            const auto media = asset.contentType.split(';').first().trimmed().toLower();
-            const auto encoding = asset.contentEncoding.trimmed().toLower();
-            if (asset.status < 200 || asset.status >= 300 || asset.canceled || asset.timedOut || asset.oversized || asset.networkError != QNetworkReply::NoError ||
-                (!encoding.isEmpty() && encoding != QByteArrayLiteral("identity")) ||
-                (media != QByteArrayLiteral("application/javascript") && media != QByteArrayLiteral("text/javascript") && media != QByteArrayLiteral("text/plain"))) continue;
-            const auto found = keyPattern.match(QString::fromUtf8(asset.body));
-            if (found.hasMatch()) { browserKey_ = found.captured(1); return browserKey_; }
-        }
-        fail(id(), phase, QStringLiteral("auth"), QStringLiteral("не удалось обновить browser key"), true);
+        return refreshSpeedtestBrowserKey(session_, options_, cancellation, phase);
     }
     bool checkedSourceAllowed(const QUrl& src) const {
         return src.scheme() == QStringLiteral("https") ||
@@ -851,8 +855,7 @@ private:
     }
     QNetworkAccessManager manager_;
     BackendOptions options_;
-    QString browserKey_ = QString::fromLatin1(browserKey);
-    bool keyRefreshAttempted_ = false;
+    SpeedtestSession session_;
     QmsServer selected_;
     QList<QmsServer> candidates_;
     QElapsedTimer phaseClock_;
