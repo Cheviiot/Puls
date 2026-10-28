@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import struct
 from pathlib import Path
 import sys
 import subprocess
@@ -194,6 +195,26 @@ class RuntimeValidatorTests(unittest.TestCase):
             (library_dir / "libgtk-3.so.0").write_bytes(b"GTK")
             with self.assertRaises(runtime.ValidationError):
                 runtime._check_linux(stage, stage / "bin" / "puls", False, {})
+
+    def test_retina_preview_preserves_logical_size_and_rejects_wrong_aspect_ratio(self):
+        sizes = ((360, 294), (360, 640), (900, 600), (1280, 800))
+        invalid = False
+
+        def render(command, env, timeout):
+            self.assertEqual(env["QT_QPA_PLATFORM"], "cocoa")
+            directory = Path(env["PULS_GUI_PREVIEW_DIR"])
+            for index in range(42):
+                width, height = sizes[index % len(sizes)]
+                pixels = (width * 2, height * 2 + (10 if invalid else 0))
+                header = b"\x89PNG\r\n\x1a\n" + b"\0\0\0\rIHDR" + struct.pack(">II", *pixels)
+                (directory / f"light-{index}-{width}x{height}.png").write_bytes(header)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(runtime.sys, "platform", "darwin"), mock.patch.object(runtime, "_run", side_effect=render):
+            self.assertEqual(runtime._check_preview(self.root / "puls", {}, self.root / "retina"), 42)
+            invalid = True
+            with self.assertRaisesRegex(runtime.ValidationError, "pixel size"):
+                runtime._check_preview(self.root / "puls", {}, self.root / "wrong-aspect")
 
 
 if __name__ == "__main__":

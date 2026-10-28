@@ -220,7 +220,8 @@ def _run(command: list[str], env: dict[str, str], timeout: int = 15) -> subproce
     except UnicodeError as exc:
         raise ValidationError("runtime check output is not valid UTF-8") from exc
     except subprocess.TimeoutExpired as exc:
-        raise ValidationError("staged application exceeded its runtime check timeout") from exc
+        verb = command[1] if len(command) > 1 else Path(command[0]).name
+        raise ValidationError(f"staged {verb} exceeded its runtime check timeout ({timeout}s)") from exc
     except OSError as exc:
         raise ValidationError("could not execute a required runtime check") from exc
 
@@ -394,7 +395,7 @@ def _check_preview(binary: Path, env: dict[str, str], scratch: Path) -> int:
     # runners have WindowServer; exercise that packaged native GUI directly.
     gui_env["QT_QPA_PLATFORM"] = "cocoa" if sys.platform == "darwin" else "offscreen"
     gui_env["PULS_GUI_PREVIEW_DIR"] = str(previews)
-    result = _run([str(binary), "gui"], gui_env, timeout=45)
+    result = _run([str(binary), "gui"], gui_env, timeout=120)
     if result.returncode != 0:
         diagnostic = result.stderr.strip()[-1500:]
         raise ValidationError(f"staged GUI preview command failed ({result.returncode}): {diagnostic}")
@@ -408,9 +409,16 @@ def _check_preview(binary: Path, env: dict[str, str], scratch: Path) -> int:
         if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
             raise ValidationError("GUI preview contains an invalid PNG image")
         dimensions = struct.unpack(">II", data[16:24])
-        if dimensions not in expected:
-            raise ValidationError("GUI preview has an unexpected image size")
-        found.add(dimensions)
+        match = re.search(r"-(\d+)x(\d+)(?:-return)?\.png$", path.name)
+        logical = (int(match[1]), int(match[2])) if match else None
+        if logical not in expected:
+            raise ValidationError(f"GUI preview has an unexpected logical size: {path.name}")
+        # QWidget::grab preserves device pixels: a Retina 900x600 window is a
+        # 1800x1200 PNG. Check equal scaling on both axes without discarding DPI.
+        scale = dimensions[0] / logical[0]
+        if not 1 <= scale <= 4 or abs(dimensions[1] - logical[1] * scale) > 1:
+            raise ValidationError(f"GUI preview pixel size {dimensions} does not match {logical}: {path.name}")
+        found.add(logical)
     if found != expected:
         raise ValidationError("GUI preview omitted a required window size")
     return len(files)

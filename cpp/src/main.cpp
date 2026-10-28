@@ -137,6 +137,14 @@ QString phaseLabel(const QString& phase) {
     return QStringLiteral("операция");
 }
 
+QString phaseStatusLabel(const QString& status) {
+    if (status == "ok") return QStringLiteral("готово");
+    if (status == "error") return QStringLiteral("ошибка");
+    if (status == "canceled") return QStringLiteral("остановлено");
+    if (status == "skipped") return QStringLiteral("пропущено");
+    return QStringLiteral("выполняется");
+}
+
 class TerminalProgress {
 public:
     explicit TerminalProgress(bool enabled) : enabled_(enabled), width_(terminalWidth(stdout)) {}
@@ -199,7 +207,11 @@ void verboseEvent(const QJsonObject& event) {
     const QString service = puls::displayName(event.value("service").toString());
     const QString phase = phaseLabel(event.value("phase").toString());
     QString line;
-    if (kind == "server_selected") {
+    if (kind == "phase_started") {
+        line = QStringLiteral("подробно  %1 · %2").arg(service, phase);
+    } else if (kind == "connection_started") {
+        line = QStringLiteral("подробно  определение данных подключения");
+    } else if (kind == "server_selected") {
         const auto server = event.value("server").toObject();
         line = QStringLiteral("подробно  %1 · сервер измерения: %2")
                    .arg(service, safeTerminalText(server.value("name").toString()));
@@ -342,7 +354,7 @@ int main(int argc, char** argv) {
             } else if (kind == "phase_completed") {
                 const auto result = event.value("phase_result").toObject();
                 progress.update(QStringLiteral("%1 · %2: %3")
-                                    .arg(service, phase, safeTerminalText(result.value("status").toString())));
+                                    .arg(service, phase, phaseStatusLabel(result.value("status").toString())));
             }
         };
         const auto result = puls::Runner().run(config, cancellation, observer);

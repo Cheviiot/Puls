@@ -5,8 +5,8 @@ endif()
 if(ANDROID)
     message(FATAL_ERROR "PULS_DEPLOY_RUNTIME is for native desktop targets; Android uses androiddeployqt")
 endif()
-if(Qt6_VERSION VERSION_LESS 6.8)
-    message(FATAL_ERROR "PULS_DEPLOY_RUNTIME requires Qt 6.8 or later")
+if(Qt6_VERSION VERSION_LESS 6.12)
+    message(FATAL_ERROR "PULS_DEPLOY_RUNTIME requires the patched Qt 6.12 release SDK or later")
 endif()
 
 # Deployment uses a complete prefix-relative tree. Absolute GNUInstallDirs paths

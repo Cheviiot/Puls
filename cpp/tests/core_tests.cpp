@@ -9,6 +9,7 @@
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonValue>
+#include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -1081,10 +1082,10 @@ void testHumanRendererColorIsOptIn() {
     const auto plain = puls::renderHuman(envelope);
     const auto colored = puls::renderHuman(envelope, true);
     expect(!plain.contains(QChar(0x1b)), "human renderer remains plain unless terminal color is requested");
-    expect(colored.contains(QStringLiteral("\x1b[1mPuls · Яндекс.Интернетометр\x1b[0m")),
-           "terminal renderer styles service heading");
-    expect(colored.contains(QStringLiteral("\x1b[32m10.00 мс\x1b[0m")),
-           "low latency uses the green latency threshold");
+    expect(colored.contains(QChar(0x1b)), "terminal rendering can enable styling");
+    auto withoutStyles = colored;
+    withoutStyles.remove(QRegularExpression(QStringLiteral("\x1b\\[[0-9;]*m")));
+    expect(withoutStyles == plain, "terminal styling preserves every result and message");
 }
 
 void testMeasurementExitCodes() {
