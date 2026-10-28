@@ -29,7 +29,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
-          version: '6.8.3'
+          version: '6.12.0'
           modules: qtwebsockets
           cache: true
       - name: Configure
@@ -73,7 +73,7 @@ jobs:
       - name: Install Qt
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
-          version: '6.8.3'
+          version: '6.12.0'
           modules: qtwebsockets
           cache: true
       - name: Configure

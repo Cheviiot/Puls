@@ -17,6 +17,16 @@ on:
       - 'scripts/**'
       - '.github/workflows/cpp-release.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Artifact version label
+        required: false
+        type: string
+        default: 0.4.0-cpp-dev
+
+env:
+  RELEASE_VERSION: ${{ inputs.version || '0.4.0-cpp-dev' }}
 
 permissions:
   contents: read
@@ -29,19 +39,18 @@ jobs:
   package:
     name: Package ${{ matrix.os }}/${{ matrix.arch }}${{ matrix.nogui && ' CLI' || ' GUI' }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Qt 6.8 Linux binaries target glibc 2.28. Jammy therefore gives amd64 a glibc 2.35 baseline.
+          # Qt 6.12 binaries require glibc 2.34; source-built Qt here preserves the glibc 2.35 baseline.
           - {runner: ubuntu-22.04, os: linux, arch: amd64, qt-host: linux, qt-arch: linux_gcc_64, gui: ON}
           # Qt's supported Linux ARM desktop reference is Ubuntu 24.04 on Raspberry Pi 5 (glibc 2.39).
           - {runner: ubuntu-24.04-arm, os: linux, arch: arm64, qt-host: linux_arm64, qt-arch: linux_gcc_arm64, gui: ON}
           - {runner: windows-2022, os: windows, arch: amd64, qt-host: windows, qt-arch: win64_msvc2022_64, gui: ON}
-          # Native ARM64 executes the packaged CLI as well as building it.
-          # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
-          - {runner: windows-11-arm, os: windows, arch: arm64, qt-host: windows, qt-arch: win64_msvc2022_arm64, gui: OFF, nogui: true}
+          # Native ARM runner with the Qt 6.12 MSVC 2022 ARM64 package repository.
+          - {runner: windows-11-arm, os: windows, arch: arm64, qt-host: windows_arm64, qt-arch: win64_msvc2022_arm64, gui: OFF, nogui: true}
           - {runner: macos-15-intel, os: darwin, arch: amd64, qt-host: mac, qt-arch: clang_64, gui: ON}
           - {runner: macos-15, os: darwin, arch: arm64, qt-host: mac, qt-arch: clang_64, gui: ON}
     steps:
@@ -57,16 +66,51 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes patchelf libgl1-mesa-dev xorg-dev libwayland-dev libxkbcommon-dev
+          sudo apt-get install --yes patchelf libgl1-mesa-dev libssl-dev libfontconfig1-dev libfreetype-dev \
+            libx11-dev libx11-xcb-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-icccm4-dev \
+            libxcb-image0-dev libxcb-keysyms1-dev libxcb-randr0-dev libxcb-render-util0-dev \
+            libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev libxcb-util-dev libxcb-xfixes0-dev \
+            libxcb-xkb-dev libxcb1-dev libxext-dev libxfixes-dev libxi-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libxrender-dev
 
-      - name: Install Qt 6.8.3
+      - name: Cache Qt 6.12 Linux amd64 SDK
+        id: qt-linux-cache
+        if: matrix.os == 'linux' && matrix.arch == 'amd64'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ~/.cache/puls/qt-6.12.0-linux-amd64-glibc235
+          key: puls-qt-6.12.0-linux-amd64-glibc235-gcc11-98ff4f44bac6ec3e-v1
+
+      - name: Build minimal Qt 6.12.0 Linux amd64 SDK from verified sources
+        id: qt-linux-source
+        if: matrix.os == 'linux' && matrix.arch == 'amd64' && steps.qt-linux-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: >-
+          python3 scripts/build_qt_linux_sdk.py
+          --cache-dir "$HOME/.cache/puls/qt-source-6.12.0"
+          --work-dir "$RUNNER_TEMP/puls-qt-6.12.0-build"
+          --prefix "$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235"
+          --jobs 2
+
+      - name: Set Qt 6.12.0 Linux amd64 SDK path
+        if: matrix.os == 'linux' && matrix.arch == 'amd64'
+        shell: bash
+        run: |
+          echo "QT_ROOT_DIR=$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235" >> "$GITHUB_ENV"
+          echo "$HOME/.cache/puls/qt-6.12.0-linux-amd64-glibc235/bin" >> "$GITHUB_PATH"
+
+      - name: Install Qt 6.12.0
+        if: matrix.os != 'linux' || matrix.arch == 'arm64'
+        id: qt
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
-          version: '6.8.3'
+          version: '6.12.0'
           host: ${{ matrix.qt-host }}
           arch: ${{ matrix.qt-arch }}
           modules: qtwebsockets
           cache: true
+          set-env: true
 
       - name: Configure Release
         shell: bash
@@ -75,7 +119,9 @@ jobs:
           -DBUILD_TESTING=OFF
           -DPULS_DEPLOY_RUNTIME=ON
           -DPULS_BUILD_GUI=${{ matrix.gui }}
-          -DPULS_VERSION_LABEL=0.4.0-cpp-dev
+          -DPULS_VERSION_LABEL="$RELEASE_VERSION"
+          -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR"
+          ${{ matrix.os == 'windows' && matrix.arch == 'arm64' && '-T v143' || '' }}
           ${{ matrix.os == 'windows' && matrix.arch == 'arm64' && '-A ARM64' || '' }}
 
       - name: Build Release
@@ -88,25 +134,25 @@ jobs:
           cmake --install build/cpp --config Release --prefix "$PWD/.scratch/stage"
           mv .scratch/stage .scratch/relocated
           if [[ "${{ matrix.gui }}" == "ON" ]]; then
-            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}" --gui
+            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version "$RELEASE_VERSION" --target "${{ matrix.os }}/${{ matrix.arch }}" --gui
           else
-            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}"
+            python scripts/validate_cpp_runtime.py --stage .scratch/relocated --version "$RELEASE_VERSION" --target "${{ matrix.os }}/${{ matrix.arch }}"
           fi
 
       - name: Create deterministic archive
         shell: bash
         run: |
           if [[ "${{ matrix.nogui || false }}" == "true" ]]; then
-            python scripts/release_cpp.py package --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}" --stage .scratch/relocated --output .scratch/archives --nogui
+            python scripts/release_cpp.py package --version "$RELEASE_VERSION" --target "${{ matrix.os }}/${{ matrix.arch }}" --stage .scratch/relocated --output .scratch/archives --nogui
           else
-            python scripts/release_cpp.py package --version 0.4.0-cpp-dev --target "${{ matrix.os }}/${{ matrix.arch }}" --stage .scratch/relocated --output .scratch/archives
+            python scripts/release_cpp.py package --version "$RELEASE_VERSION" --target "${{ matrix.os }}/${{ matrix.arch }}" --stage .scratch/relocated --output .scratch/archives
           fi
 
       - name: Upload target archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: cpp-desktop-${{ matrix.os }}-${{ matrix.arch }}
-          path: .scratch/archives/Puls_0.4.0-cpp-dev_${{ matrix.os }}_${{ matrix.arch }}.*
+          name: cpp-desktop-${{ env.RELEASE_VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: .scratch/archives/Puls_${{ env.RELEASE_VERSION }}_${{ matrix.os }}_${{ matrix.arch }}.*
           if-no-files-found: error
           retention-days: 14
 
@@ -122,14 +168,14 @@ jobs:
       - name: Download all six target archives
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v8.0.1
         with:
-          pattern: cpp-desktop-*
+          pattern: cpp-desktop-${{ env.RELEASE_VERSION }}-*
           path: .scratch/archives
           merge-multiple: true
 
       - name: Assemble manifest, checksums, and installers
         run: >-
           python3 scripts/release_cpp.py assemble
-          --version 0.4.0-cpp-dev
+          --version "${{ env.RELEASE_VERSION }}"
           --input .scratch/archives
           --output .scratch/assembled
           --install-sh scripts/install.sh
@@ -142,7 +188,7 @@ jobs:
       - name: Upload complete unsigned package set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: puls-cpp-desktop-0.4.0-cpp-dev
+          name: puls-cpp-desktop
           path: .scratch/assembled/*
           if-no-files-found: error
           retention-days: 14

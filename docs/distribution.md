@@ -27,6 +27,21 @@ go build -tags nogui ./cmd/puls
 
 ## Артефакты
 
+Нативный C++ workflow собирает GUI desktop targets и Windows arm64 CLI с Qt
+6.12.0. Qt 6.12.0 Linux amd64 SDK строится в GitHub Actions из официального
+source archive с проверкой закреплённого SHA-256; конфигурация включает только
+`qtbase` и `qtwebsockets`. Сборка идёт на Ubuntu 22.04/GCC 11 и даёт GLIBC
+2.35 baseline, совместимый с ALT Workstation GLIBC 2.38. Установленный Qt SDK
+хранится в Actions cache; GTK, QML и Wayland не собираются.
+
+Для Windows arm64 workflow использует native runner `windows-11-arm`, Qt
+repository host `windows_arm64` и architecture `win64_msvc2022_arm64`.
+Используется доступный runner toolset MSVC v143, соответствующий Qt SDK.
+Проверка runtime и упаковка проходят отдельно на каждом из шести desktop
+targets. Переиспользуемый `.github/workflows/cpp-release.yml` принимает input
+`version`; он собирает артефакт `puls-cpp-desktop` без публикации. Внутренние
+target artifacts именуются с версией.
+
 Release workflow собирает native GUI+CLI архивы для Linux, Windows amd64 и
 macOS. Windows arm64 временно получает CLI-only архив. Android публикуется как
 подписанный universal APK с application ID `io.github.cheviiot.puls`.
