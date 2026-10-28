@@ -8,10 +8,12 @@
 #include <QLibraryInfo>
 #include <QSslSocket>
 #include <QThread>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 
@@ -23,6 +25,7 @@
 #include <fcntl.h>
 #include <io.h>
 #else
+#include <sys/ioctl.h>
 #include <unistd.h>
 #endif
 
@@ -96,6 +99,133 @@ bool terminal(FILE* stream) {
 #endif
 }
 
+int terminalWidth(FILE* stream) {
+#ifdef Q_OS_WIN
+    const auto handle = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stream)));
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    if (handle != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(handle, &info))
+        return qMax(1, static_cast<int>(info.srWindow.Right - info.srWindow.Left + 1));
+#else
+    winsize size{};
+    if (ioctl(fileno(stream), TIOCGWINSZ, &size) == 0 && size.ws_col > 0)
+        return static_cast<int>(size.ws_col);
+#endif
+    return 80;
+}
+
+QString safeTerminalText(QString value) {
+    QString clean;
+    clean.reserve(qMin(value.size(), 320));
+    for (const QChar ch : value) {
+        const ushort code = ch.unicode();
+        if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) continue;
+        clean.append(ch);
+        if (clean.size() >= 300) {
+            clean.append(QChar(0x2026));
+            break;
+        }
+    }
+    return clean;
+}
+
+QString phaseLabel(const QString& phase) {
+    if (phase == "select") return QStringLiteral("выбор сервера измерения");
+    if (phase == "ping") return QStringLiteral("задержка");
+    if (phase == "download") return QStringLiteral("загрузка");
+    if (phase == "upload") return QStringLiteral("отдача");
+    if (phase == "connection") return QStringLiteral("данные подключения");
+    return QStringLiteral("операция");
+}
+
+class TerminalProgress {
+public:
+    explicit TerminalProgress(bool enabled) : enabled_(enabled), width_(terminalWidth(stdout)) {}
+
+    void update(const QString& text) {
+        if (!enabled_) return;
+        auto line = safeTerminalText(text);
+        const int maxLength = qMax(1, width_ - 1);
+        if (line.size() > maxLength) {
+            line.truncate(qMax(0, maxLength - 1));
+            line.append(QChar(0x2026));
+        }
+        const int width = qMax(displayed_.size(), line.size());
+        writeOutput(stdout, (QStringLiteral("\r") + line + QString(width - line.size(), QLatin1Char(' '))).toUtf8());
+        displayed_ = line;
+    }
+
+    void clear() {
+        if (!enabled_ || displayed_.isEmpty()) return;
+        writeOutput(stdout, (QStringLiteral("\r") + QString(displayed_.size(), QLatin1Char(' ')) + QStringLiteral("\r")).toUtf8());
+        displayed_.clear();
+    }
+
+private:
+    bool enabled_ = false;
+    int width_ = 80;
+    QString displayed_;
+};
+
+class ConsoleColorMode {
+public:
+    explicit ConsoleColorMode(bool requested) {
+#ifdef Q_OS_WIN
+        handle_ = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stdout)));
+        if (!requested || handle_ == INVALID_HANDLE_VALUE || !GetConsoleMode(handle_, &original_)) return;
+        enabled_ = SetConsoleMode(handle_, original_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
+#else
+        enabled_ = requested;
+#endif
+    }
+
+    ~ConsoleColorMode() {
+#ifdef Q_OS_WIN
+        if (enabled_) SetConsoleMode(handle_, original_);
+#endif
+    }
+
+    bool enabled() const { return enabled_; }
+
+private:
+    bool enabled_ = false;
+#ifdef Q_OS_WIN
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    DWORD original_ = 0;
+#endif
+};
+
+void verboseEvent(const QJsonObject& event) {
+    const QString kind = event.value("kind").toString();
+    const QString service = puls::displayName(event.value("service").toString());
+    const QString phase = phaseLabel(event.value("phase").toString());
+    QString line;
+    if (kind == "server_selected") {
+        const auto server = event.value("server").toObject();
+        line = QStringLiteral("подробно  %1 · сервер измерения: %2")
+                   .arg(service, safeTerminalText(server.value("name").toString()));
+    } else if (kind == "phase_completed") {
+        const auto result = event.value("phase_result").toObject();
+        line = QStringLiteral("подробно  %1 · %2: %3")
+                   .arg(service, phase, safeTerminalText(result.value("status").toString()));
+        const auto error = result.value("error").toObject();
+        if (!error.isEmpty())
+            line += QStringLiteral(" · %1: %2").arg(safeTerminalText(error.value("code").toString()),
+                                                       safeTerminalText(error.value("message").toString()));
+        for (const auto& warning : result.value("warnings").toArray())
+            line += QStringLiteral(" · предупреждение: %1").arg(safeTerminalText(warning.toString()));
+    } else if (kind == "connection_completed") {
+        const auto connection = event.value("connection").toObject();
+        line = QStringLiteral("подробно  данные подключения: %1").arg(safeTerminalText(connection.value("status").toString()));
+        const auto error = connection.value("error").toObject();
+        if (!error.isEmpty())
+            line += QStringLiteral(" · %1: %2").arg(safeTerminalText(error.value("code").toString()),
+                                                       safeTerminalText(error.value("message").toString()));
+        for (const auto& warning : connection.value("warnings").toArray())
+            line += QStringLiteral(" · предупреждение: %1").arg(safeTerminalText(warning.toString()));
+    }
+    if (!line.isEmpty()) errorOutput(safeTerminalText(line) + '\n');
+}
+
 QString selectService() {
     while (true) {
         if (!writeOutput(stdout, QStringLiteral(
@@ -113,14 +243,6 @@ QString selectService() {
         if (choice == "q" || choice == "quit") return {};
         if (!writeOutput(stdout, QStringLiteral("Введите 1, 2 или 3.\n\n").toUtf8())) return {};
     }
-}
-
-QString phaseName(const QString& phase) {
-    if (phase == "select") return QStringLiteral("выбор сервера измерения");
-    if (phase == "ping") return QStringLiteral("задержка");
-    if (phase == "download") return QStringLiteral("загрузка");
-    if (phase == "upload") return QStringLiteral("отдача");
-    return phase;
 }
 
 int runtimeProbe(int& argc, char** argv) {
@@ -191,19 +313,43 @@ int main(int argc, char** argv) {
     }
     puls::Cancellation cancellation;
     SignalMonitor monitor(cancellation);
+    const bool wantsColor = !config.json && !config.noColor && terminal(stdout) &&
+                            std::getenv("NO_COLOR") == nullptr && qEnvironmentVariable("TERM") != "dumb";
+    TerminalProgress progress(!config.json && terminal(stdout));
     try {
         puls::Observer observer;
-        if (config.verbose) observer = [](const QJsonObject& event) {
+        if (config.verbose || (!config.json && terminal(stdout))) observer = [&](const QJsonObject& event) {
             const auto kind = event.value("kind").toString();
-            if (kind == "phase_started")
-                errorOutput(QStringLiteral("подробно  %1 · %2\n")
-                                .arg(puls::displayName(event.value("service").toString()), phaseName(event.value("phase").toString())));
-            else if (kind == "connection_started")
-                errorOutput(QStringLiteral("подробно  определение данных подключения\n"));
+            if (config.verbose) {
+                progress.clear();
+                verboseEvent(event);
+            }
+            if (config.json || !terminal(stdout)) return;
+            const auto service = puls::displayName(event.value("service").toString());
+            const auto phase = phaseLabel(event.value("phase").toString());
+            if (kind == "connection_started") progress.update(QStringLiteral("Определение данных подключения…"));
+            else if (kind == "connection_completed") progress.clear();
+            else if (kind == "phase_started") progress.update(QStringLiteral("%1 · %2…").arg(service, phase));
+            else if (kind == "server_selected") {
+                const auto server = event.value("server").toObject();
+                progress.update(QStringLiteral("%1 · сервер измерения: %2").arg(service, safeTerminalText(server.value("name").toString())));
+            } else if (kind == "throughput_progress") {
+                const auto throughput = event.value("throughput").toObject();
+                const auto speed = throughput.value("mbps");
+                const auto value = speed.isDouble() ? QStringLiteral("%1 Мбит/с").arg(speed.toDouble(), 0, 'f', 2)
+                                                    : QStringLiteral("расчёт скорости…");
+                progress.update(QStringLiteral("%1 · %2 · %3").arg(service, phase, value));
+            } else if (kind == "phase_completed") {
+                const auto result = event.value("phase_result").toObject();
+                progress.update(QStringLiteral("%1 · %2: %3")
+                                    .arg(service, phase, safeTerminalText(result.value("status").toString())));
+            }
         };
         const auto result = puls::Runner().run(config, cancellation, observer);
+        progress.clear();
+        ConsoleColorMode colorMode(wantsColor);
         const auto output = config.json ? QJsonDocument(result).toJson(QJsonDocument::Indented)
-                                        : puls::renderHuman(result).toUtf8();
+                                        : puls::renderHuman(result, colorMode.enabled()).toUtf8();
         if (!writeOutput(stdout, output)) {
             errorOutput(config.json ? QStringLiteral("ошибка записи JSON\n") : QStringLiteral("ошибка записи результата\n"));
             return 1;
@@ -214,6 +360,7 @@ int main(int argc, char** argv) {
         }
         return puls::exitCode(result);
     } catch (const std::exception& error) {
+        progress.clear();
         errorOutput(QStringLiteral("ошибка: %1\n").arg(QString::fromUtf8(error.what())));
         return cancellation.canceled() || interrupted.load() ? 130 : 1;
     }

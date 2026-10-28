@@ -59,6 +59,29 @@ QString metric(const QJsonObject& phase, const QString& field, const QString& un
     const auto message = phase.value("error").toObject().value("message").toString();
     return message.isEmpty() ? QStringLiteral("—") : QStringLiteral("не удалось · ") + message;
 }
+
+QString ansi(const QString& value, const char* code, bool color) {
+    return color ? QStringLiteral("\x1b[%1m%2\x1b[0m").arg(QString::fromLatin1(code), value) : value;
+}
+
+QString coloredMetric(const QJsonObject& phase, const QString& field, const QString& unit,
+                      bool color, bool latency = false) {
+    const auto value = phase.value(field);
+    if (!value.isDouble()) {
+        const auto text = metric(phase, field, unit);
+        return phase.value("status") == "error" || phase.value("status") == "canceled"
+            ? ansi(text, phase.value("status") == "canceled" ? "33" : "31", color) : text;
+    }
+    const double number = value.toDouble();
+    const char* code = latency ? (number <= 30 ? "32" : number <= 80 ? "33" : "31")
+                               : (number >= 50 ? "32" : number >= 10 ? "33" : "31");
+    return ansi(metric(phase, field, unit), code, color);
+}
+
+QString coloredStatus(const QString& status, bool color) {
+    const char* code = status == "ok" ? "32" : status == "partial" ? "33" : status == "canceled" ? "33" : "31";
+    return ansi(statusText(status), code, color);
+}
 } // namespace
 
 Config parseConfig(const QStringList& args) {
@@ -201,19 +224,16 @@ QString helpText() {
   puls ip speedtest             IP и интернет-провайдер через speedtest.ru
   puls ip yandex --json         использовать конкретный сервис
 
-C++ dev: измерение загрузки и отдачи пока недоступно.
-Используйте --only ping или puls ip.
-
 Ctrl+C останавливает операцию · подробнее: README.md
 )");
 }
 
-QString renderHuman(const QJsonObject& envelope) {
+QString renderHuman(const QJsonObject& envelope, bool color) {
     QString text;
     QTextStream out(&text);
     if (envelope.value("connection").isObject()) {
         const auto connection = envelope.value("connection").toObject();
-        out << "Puls · Подключение\n";
+        out << ansi("Puls · Подключение", "1", color) << '\n';
         if (connection.value("status") == "ok") {
             out << "  Внешний IP             " << valueOrDash(connection.value("external_ip")) << '\n';
             out << "  Интернет-провайдер      " << valueOrDash(connection.value("isp")) << '\n';
@@ -221,7 +241,8 @@ QString renderHuman(const QJsonObject& envelope) {
                 out << "  Сервис                 " << displayName(connection.value("detected_by").toString()) << '\n';
         } else {
             const auto error = connection.value("error").toObject();
-            out << "  Результат              " << (connection.value("status") == "canceled" ? "остановлено" : "не удалось");
+            out << "  Результат              " << ansi(connection.value("status") == "canceled" ? "остановлено" : "не удалось",
+                                                                       connection.value("status") == "canceled" ? "33" : "31", color);
             if (!error.value("message").toString().isEmpty()) out << " · " << error.value("message").toString();
             out << '\n';
         }
@@ -231,7 +252,7 @@ QString renderHuman(const QJsonObject& envelope) {
     const auto results = envelope.value("results").toArray();
     for (const auto value : results) {
         const auto result = value.toObject();
-        out << "Puls · " << displayName(result.value("service").toString()) << '\n';
+        out << ansi(QStringLiteral("Puls · ") + displayName(result.value("service").toString()), "1", color) << '\n';
         const auto server = result.value("server").toObject();
         if (!server.isEmpty()) {
             out << "  Сервер измерения       " << valueOrDash(server.value("name"));
@@ -241,18 +262,18 @@ QString renderHuman(const QJsonObject& envelope) {
         }
         const auto phases = result.value("phases").toObject();
         const auto ping = phases.value("ping").toObject();
-        out << "  Задержка               " << metric(ping, "value_ms", QStringLiteral("мс"));
+        out << "  Задержка               " << coloredMetric(ping, "value_ms", QStringLiteral("мс"), color, true);
         if (ping.value("jitter_ms").isDouble())
             out << "  ·  джиттер " << QString::number(ping.value("jitter_ms").toDouble(), 'f', 2) << " мс";
         out << '\n';
-        out << "  Загрузка               " << metric(phases.value("download").toObject(), "mbps", QStringLiteral("Мбит/с")) << '\n';
-        out << "  Отдача                 " << metric(phases.value("upload").toObject(), "mbps", QStringLiteral("Мбит/с")) << '\n';
+        out << "  Загрузка               " << coloredMetric(phases.value("download").toObject(), "mbps", QStringLiteral("Мбит/с"), color) << '\n';
+        out << "  Отдача                 " << coloredMetric(phases.value("upload").toObject(), "mbps", QStringLiteral("Мбит/с"), color) << '\n';
         const auto error = result.value("error").toObject().value("message").toString();
-        if (!error.isEmpty()) out << "  Ошибка                 " << error << '\n';
+        if (!error.isEmpty()) out << "  Ошибка                 " << ansi(error, "31", color) << '\n';
         for (const auto warning : result.value("warnings").toArray()) out << "  ! " << warning.toString() << '\n';
-        out << "  " << statusText(result.value("status").toString()) << "\n\n";
+        out << "  " << coloredStatus(result.value("status").toString(), color) << "\n\n";
     }
-    if (results.size() > 1) out << "Итог  " << statusText(envelope.value("status").toString()) << '\n';
+    if (results.size() > 1) out << "Итог  " << coloredStatus(envelope.value("status").toString(), color) << '\n';
     return text;
 }
 } // namespace puls

@@ -1069,6 +1069,24 @@ void testCancellationHelper() {
                  "cancellation helper throws after cancellation");
 }
 
+void testHumanRendererColorIsOptIn() {
+    const QJsonObject phase{{"status", "ok"}, {"value_ms", 10.0}, {"jitter_ms", QJsonValue::Null}};
+    const QJsonObject skipped{{"status", "skipped"}};
+    const QJsonObject measurement{{"service", "yandex"}, {"status", "ok"},
+                                  {"server", QJsonValue::Null},
+                                  {"phases", QJsonObject{{"ping", phase}, {"download", skipped}, {"upload", skipped}}},
+                                  {"warnings", QJsonArray{}}};
+    const QJsonObject envelope{{"status", "ok"}, {"connection", QJsonValue::Null},
+                               {"results", QJsonArray{measurement}}};
+    const auto plain = puls::renderHuman(envelope);
+    const auto colored = puls::renderHuman(envelope, true);
+    expect(!plain.contains(QChar(0x1b)), "human renderer remains plain unless terminal color is requested");
+    expect(colored.contains(QStringLiteral("\x1b[1mPuls · Яндекс.Интернетометр\x1b[0m")),
+           "terminal renderer styles service heading");
+    expect(colored.contains(QStringLiteral("\x1b[32m10.00 мс\x1b[0m")),
+           "low latency uses the green latency threshold");
+}
+
 void testMeasurementExitCodes() {
     expect(puls::exitCode({{"status", "ok"}}) == 0, "successful envelope exit code");
     expect(puls::exitCode({{"status", "partial"}}) == 1, "partial envelope exit code");
@@ -1085,6 +1103,7 @@ int main(int argc, char** argv) {
     testBooleanFlagSyntax();
     testInvalidCLIArguments();
     testPingStatsParity();
+    testHumanRendererColorIsOptIn();
     testCancellationHelper();
     testMeasurementExitCodes();
     testRunnerContinuesAllAfterServiceFailure();

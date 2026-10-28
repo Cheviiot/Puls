@@ -88,6 +88,6 @@ private:
 };
 
 int exitCode(const QJsonObject& envelope);
-QString renderHuman(const QJsonObject& envelope);
+QString renderHuman(const QJsonObject& envelope, bool color = false);
 
 } // namespace puls
