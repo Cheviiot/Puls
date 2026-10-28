@@ -23,7 +23,7 @@ class ApkVerificationTests(unittest.TestCase):
         self.badging = "package: name='io.github.cheviiot.puls' versionCode='4000' versionName='0.4.0-cpp-dev'\n"
         self.permissions = "uses-permission: name='android.permission.INTERNET'\n"
 
-    def package(self, missing=None, wrong_machine=False, alignment=16384):
+    def package(self, missing=None, wrong_machine=False, alignment=16384, empty_notice=False):
         with zipfile.ZipFile(self.apk, "w") as archive:
             for abi, machine in (("arm64-v8a", 183), ("x86_64", 62)):
                 header = bytearray(64)
@@ -39,8 +39,12 @@ class ApkVerificationTests(unittest.TestCase):
                     if missing and missing in name:
                         continue
                     archive.writestr(name, header + program)
-            for notice in ("openssl_license", "puls_license", "qt_lgpl_3_0_only"):
-                archive.writestr(f"res/raw/{notice}.txt", "synthetic notice")
+            for notice in ("OpenSSL.txt", "Puls.txt", "Qt/README.txt", "Qt/LGPL-3.0-only.txt",
+                           "Qt/LGPL-2.1-or-later.txt", "Qt/GPL-3.0-only.txt",
+                           "Qt/GPL-2.0-only.txt", "Qt/BSD-3-Clause.txt"):
+                if missing and missing in notice:
+                    continue
+                archive.writestr(f"assets/licenses/{notice}", "" if empty_notice else "synthetic notice")
 
     def command(self, *arguments):
         if "permissions" in arguments:
@@ -70,6 +74,16 @@ class ApkVerificationTests(unittest.TestCase):
     def test_missing_tls_runtime_is_rejected(self):
         self.package(missing="libssl_3")
         with self.assertRaisesRegex(ValueError, "missing"):
+            self.verify()
+
+    def test_missing_or_empty_license_is_rejected(self):
+        for missing in ("OpenSSL.txt", "Puls.txt", "Qt/LGPL-3.0-only.txt", "Qt/BSD-3-Clause.txt"):
+            with self.subTest(missing=missing):
+                self.package(missing=missing)
+                with self.assertRaisesRegex(ValueError, "license notice"):
+                    self.verify()
+        self.package(empty_notice=True)
+        with self.assertRaisesRegex(ValueError, "empty license"):
             self.verify()
 
     def test_wrong_native_architecture_is_rejected(self):

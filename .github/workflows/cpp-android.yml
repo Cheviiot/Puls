@@ -131,9 +131,28 @@ jobs:
             .scratch/Qt/${{ env.QT_VERSION }}/android_arm64_v8a
             .scratch/Qt/${{ env.QT_VERSION }}/android_x86_64
           key: qt-android-${{ runner.os }}-${{ runner.arch }}-${{ env.QT_VERSION }}-aqt3.3.0-v1
+      - name: Restore compiled OpenSSL runtime
+        id: android-openssl-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            .scratch/android-openssl/arm64-v8a
+            .scratch/android-openssl/x86_64
+            .scratch/android-openssl/LICENSE.txt
+          key: android-openssl-${{ runner.os }}-${{ runner.arch }}-3.5.9-ndk${{ env.NDK_VERSION }}-api28-${{ hashFiles('cpp/android/ci/build_openssl.sh', 'cpp/android/openssl.cnf') }}
       - name: Build verified OpenSSL 3 for both ABIs
+        if: steps.android-openssl-cache.outputs.cache-hit != 'true'
         shell: bash
         run: bash cpp/android/ci/build_openssl.sh "$GITHUB_WORKSPACE/.scratch/android-openssl"
+      - name: Save compiled OpenSSL runtime
+        if: steps.android-openssl-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            .scratch/android-openssl/arm64-v8a
+            .scratch/android-openssl/x86_64
+            .scratch/android-openssl/LICENSE.txt
+          key: android-openssl-${{ runner.os }}-${{ runner.arch }}-3.5.9-ndk${{ env.NDK_VERSION }}-api28-${{ hashFiles('cpp/android/ci/build_openssl.sh', 'cpp/android/openssl.cnf') }}
       - name: Build the unsigned multi-ABI release APK
         shell: bash
         run: |

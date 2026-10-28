@@ -96,21 +96,19 @@ if(ANDROID)
     list(REMOVE_DUPLICATES QT_ANDROID_MULTI_ABI_FORWARD_VARS)
     set(puls_android_package "${PROJECT_BINARY_DIR}/puls-android-package")
     file(MAKE_DIRECTORY "${puls_android_package}/res/drawable"
-        "${puls_android_package}/res/raw")
+        "${puls_android_package}/assets/licenses/Qt")
     configure_file(cpp/android/AndroidManifest.xml.in
         "${puls_android_package}/AndroidManifest.xml" @ONLY)
     configure_file(internal/gui/assets/Icon.png
         "${puls_android_package}/res/drawable/puls_icon.png" COPYONLY)
     configure_file("${PULS_ANDROID_OPENSSL_ROOT}/LICENSE.txt"
-        "${puls_android_package}/res/raw/openssl_license.txt" COPYONLY)
-    configure_file(LICENSE "${puls_android_package}/res/raw/puls_license.txt" COPYONLY)
+        "${puls_android_package}/assets/licenses/OpenSSL.txt" COPYONLY)
+    configure_file(LICENSE "${puls_android_package}/assets/licenses/Puls.txt" COPYONLY)
     file(GLOB puls_android_qt_notices CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/cmake/qt-licenses/*.txt")
     foreach(notice IN LISTS puls_android_qt_notices)
-        get_filename_component(name "${notice}" NAME_WLE)
-        string(TOLOWER "${name}" name)
-        string(REGEX REPLACE "[^a-z0-9_]" "_" name "${name}")
-        configure_file("${notice}" "${puls_android_package}/res/raw/qt_${name}.txt" COPYONLY)
+        get_filename_component(name "${notice}" NAME)
+        configure_file("${notice}" "${puls_android_package}/assets/licenses/Qt/${name}" COPYONLY)
     endforeach()
     set_target_properties(puls PROPERTIES
         QT_ANDROID_PACKAGE_NAME "io.github.cheviiot.puls"

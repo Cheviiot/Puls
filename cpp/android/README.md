@@ -37,10 +37,21 @@ created by the linker. No post-link ELF rewriting is needed. The helper checks
 these names and every load segment before Qt/Gradle packaging.
 Both the application and OpenSSL use 16 KiB ELF alignment;
 the APK verifier checks all packaged native libraries and ZIP alignment.
+CI caches only the compiled ABI runtime directories and upstream license,
+with the OpenSSL version, NDK, API level, helper and target configuration in
+the key. Sources and intermediate builds are not cached.
 The [Qt OpenSSL documentation](https://doc.qt.io/qt-6.12/android-openssl-support.html)
 explains the `_3` suffix and why Android's private TLS libraries cannot be used.
 Android sets `ANDROID_OPENSSL_SUFFIX=_3` at the start of `main()`, before Qt
 can initialize its TLS backend.
+
+License texts are packaged as `assets/licenses/OpenSSL.txt`,
+`assets/licenses/Puls.txt`, and `assets/licenses/Qt/<original .txt filename>`.
+The verifier requires every bundled notice to exist and be nonempty.
+Android's [AAPT2 resource optimization](https://developer.android.com/tools/aapt2#optimize_options)
+can shorten paths under `res/`, so licenses use assets with stable paths.
+Qt's resource bundle occupies `assets/android_rcc_bundle`, leaving this
+separate license directory as ordinary APK assets.
 
 Signing is restricted to trusted repository jobs with the existing
 `PULS_ANDROID_KEYSTORE_BASE64`, `PULS_ANDROID_KEYSTORE_PASSWORD`,

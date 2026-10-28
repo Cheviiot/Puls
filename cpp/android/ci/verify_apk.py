@@ -73,9 +73,12 @@ def verify(apk: Path, tools: Path, version: str, version_code: int) -> dict:
                     verify_elf(source, name, machine)
             if not any(name.startswith(f"lib/{abi}/libplugins_tls_") and "openssl" in name for name in names):
                 raise ValueError(f"APK is missing the Qt OpenSSL TLS plugin for {abi}")
-        for name in ("res/raw/openssl_license.txt", "res/raw/puls_license.txt", "res/raw/qt_lgpl_3_0_only.txt"):
-            if name not in names:
-                raise ValueError(f"APK is missing license notice: {name}")
+        for name in ("assets/licenses/OpenSSL.txt", "assets/licenses/Puls.txt",
+                     "assets/licenses/Qt/README.txt", "assets/licenses/Qt/LGPL-3.0-only.txt",
+                     "assets/licenses/Qt/LGPL-2.1-or-later.txt", "assets/licenses/Qt/GPL-3.0-only.txt",
+                     "assets/licenses/Qt/GPL-2.0-only.txt", "assets/licenses/Qt/BSD-3-Clause.txt"):
+            if name not in names or archive.getinfo(name).file_size == 0:
+                raise ValueError(f"APK is missing or has an empty license notice: {name}")
     digest = hashlib.sha256()
     with apk.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
