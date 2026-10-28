@@ -2,24 +2,32 @@
 
 Кратко опишите изменение и его назначение.
 
-## Как проверено
+## Совместимость и приватность
 
-- [ ] `go test ./...`
-- [ ] `go test -race ./...`
-- [ ] `go vet ./...`
-- [ ] `staticcheck ./...`
-- [ ] `govulncheck ./...`
-- [ ] При изменении workflow выполнен `actionlint .github/workflows/*.yml`
-- [ ] При изменении установщиков выполнены `shellcheck` и PowerShell `-Help`
-- [ ] Изменение GUI проверено в светлой/тёмной теме и на узком размере окна
-- [ ] Для изменения протокола добавлен локальный тест ответа сервиса
-- [ ] Сетевой тест выполнен только при необходимости
+- [ ] Сохранены публичные команды, flags, exit codes и JSON schema 1 либо описаны необходимые изменения.
+- [ ] Help, README, CHANGELOG и golden checks обновлены при изменении поведения.
+- [ ] Diff не содержит credentials, keystore, IP/ISP, production responses или случайных generated binaries.
+- [ ] Описано влияние сетевого трафика и поведение live-тестов.
 
-## Совместимость и риски
+## Проверки C++/Qt
 
-Укажите изменения CLI/JSON, расхода трафика, сетевого протокола и возможные откаты.
+- [ ] Запущены targeted CTest для изменённого поведения.
+- [ ] Полный CTest прошёл с `--repeat until-fail:10`.
+- [ ] ASan/UBSan выполнены для изменений engine или сетевого кода.
+- [ ] TSan выполнен для engine, если изменена конкурентность и среда его поддерживает.
+- [ ] `cppcheck` прошёл.
+- [ ] Python release packager tests прошли: `python3 -m unittest discover -s scripts/tests -v`.
+- [ ] Android verifier/smoke contract tests прошли: `python3 -m unittest discover -s cpp/android/ci -p 'test_*.py' -v`.
+- [ ] `actionlint .github/workflows/*.yml` прошёл при изменении workflow.
+- [ ] `shellcheck scripts/install.sh` и PowerShell `-Help` прошли при изменении установщиков.
+- [ ] Проверки CI для затронутых desktop targets и Windows installer завершились успешно.
+- [ ] Android CI с проверкой и запуском подписанного APK прошёл, если изменение затрагивает Android.
 
-## Документация и приватность
+## Go reference-проверки
 
-- [ ] Help, README и CHANGELOG обновлены при изменении поведения
-- [ ] Diff не содержит токенов, keystore, IP-related ответов и случайных generated binaries
+- [ ] Если изменён код `cmd/` или `internal/`, выполнены соответствующие Go reference checks (`go test`, `go test -race`, `go vet`, `staticcheck`, `govulncheck`).
+- [ ] Go reference-код не изменялся.
+
+## Риски и откат
+
+Укажите возможные риски, совместимость CLI/JSON и способ отката.
