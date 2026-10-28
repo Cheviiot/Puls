@@ -77,6 +77,26 @@ void testStartupTimeoutJoinsWorker() {
     expect(elapsed < 500ms, "startup timeout returns promptly");
 }
 
+void testMeasurementTimerStartsAfterFirstReady() {
+    auto runConfig = config(80ms);
+    runConfig.startupTimeout = 200ms;
+    const auto wallStart = std::chrono::steady_clock::now();
+    const auto result = puls::transfer::run(runConfig, {}, [](int, int, const auto& context) {
+        std::this_thread::sleep_for(45ms);
+        context.ready();
+        while (!context.stopped()) {
+            context.record(16);
+            std::this_thread::sleep_for(1ms);
+        }
+    });
+    const auto wallElapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - wallStart).count();
+    expect(!result.error && result.bytes > 0, "delayed ready worker completes measurement");
+    expect(result.elapsedSeconds >= 0.065 && result.elapsedSeconds <= 0.12,
+           "measurement duration begins after worker readiness");
+    expect(wallElapsed > result.elapsedSeconds + 0.03,
+           "startup delay is excluded from measurement elapsed time");
+}
+
 void testAllWorkersFailEvenAfterBytes() {
     auto runConfig = config(400ms, 2);
     runConfig.reconnects = 0;
@@ -229,6 +249,15 @@ void testCancellationAtStartupWarmupAndMeasurement() {
     auto measurement = config(500ms);
     measurement.progressInterval = 5ms;
     runCanceled(measurement, true);
+
+    puls::Cancellation alreadyCanceled;
+    alreadyCanceled.cancel();
+    std::atomic_int invoked{0};
+    const auto canceled = puls::transfer::run(config(), alreadyCanceled,
+        [&](int, int, const auto&) { ++invoked; });
+    expect(canceled.error && canceled.error->code == "canceled",
+           "pre-canceled invocation returns canceled immediately");
+    expect(invoked.load() == 0, "pre-canceled invocation starts no workers");
 }
 
 void testProgressRunsOnCoordinatorAndElapsedExcludesTeardown() {
@@ -313,6 +342,7 @@ int main(int argc, char** argv) {
     testReadinessWarmupAndDeadlineAccounting();
     testStartupTimeoutJoinsWorker();
     testAllWorkersFailEvenAfterBytes();
+    testMeasurementTimerStartsAfterFirstReady();
     testPartialWorkerSuccessAndAggregatedError();
     testOnlyOneReconnect();
     testConfigurationAndAdaptiveCap();
