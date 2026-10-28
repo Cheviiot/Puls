@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QHostAddress>
+#include <QTimer>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
@@ -22,8 +23,10 @@ void expect(bool value, const char* label) {
 class MockServer final : public QThread {
 public:
     enum class Mode { Normal, RefreshKey, BadJWT, BadDownloadType, BadDownloadEncoding,
-                      BadUploadEncoding, DownloadServerError, RejectFirstDownload, StalledDownload };
-    explicit MockServer(Mode mode = Mode::Normal) : mode_(mode) {
+                      BadUploadEncoding, DownloadServerError, RejectFirstDownload, StalledDownload,
+                      ControlledDownload };
+    explicit MockServer(Mode mode = Mode::Normal, std::atomic_bool* controlledRelease = nullptr)
+        : mode_(mode), controlledRelease_(controlledRelease) {
         start();
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (port() == 0 && std::chrono::steady_clock::now() < until) QThread::msleep(2);
@@ -97,8 +100,9 @@ private:
         const QByteArray path = target.split('?').value(0);
         if (path == "/api/server/gentoken") {
             ++gentokenCalls_;
-            const auto key = headerValue(headers, "x-api-key");
-            if (mode_ == Mode::RefreshKey && key != "fresh-browser-key-123456") {
+            if (method != "POST") {
+                reply(socket, 405, "application/json", "{}");
+            } else if (mode_ == Mode::RefreshKey && headerValue(headers, "x-api-key") != "fresh-browser-key-123456") {
                 reply(socket, 403, "application/json", "{}");
             } else if (mode_ == Mode::BadJWT) {
                 reply(socket, 200, "application/json", R"({"token":"bad"})");
@@ -133,6 +137,22 @@ private:
                 socket->flush();
                 return;
             }
+            if (mode_ == Mode::ControlledDownload) {
+                socket->write("HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nContent-Length: 25000000\r\nContent-Type: application/octet-stream\r\n\r\n");
+                socket->flush();
+                auto* poll = new QTimer(socket);
+                poll->setInterval(1);
+                QObject::connect(poll, &QTimer::timeout, socket, [socket, poll, release = controlledRelease_] {
+                    if (release && release->load()) {
+                        socket->write(QByteArray(1024, 'x'));
+                        socket->flush();
+                        poll->stop();
+                        poll->deleteLater();
+                    }
+                });
+                poll->start();
+                return;
+            }
             bool ok = false;
             const auto query = target.split('?').value(1);
             int chunk = 0;
@@ -159,6 +179,7 @@ private:
     }
 
     Mode mode_;
+    std::atomic_bool* controlledRelease_ = nullptr;
     std::atomic<quint16> port_{0};
     std::atomic_int downloads_{0};
     std::atomic_int gentokenCalls_{0};
@@ -200,6 +221,21 @@ void testDownloadExactBytesAndRefresh() {
     expect(result.value("bytes").toVariant().toLongLong() > 0, "download counts confirmed bytes");
     expect(server.pageCalls() == 1 && server.scriptCalls() == 1, "browser key refresh is single and same-origin");
     expect(server.gentokenCalls() == 2, "JWT is refreshed after forbidden browser key exactly once");
+}
+
+void testDownloadCountsOnlyBytesReceivedDuringMeasurement() {
+    std::atomic_bool release{false};
+    std::atomic_int progressTicks{0};
+    MockServer server(MockServer::Mode::ControlledDownload, &release);
+    puls::SpeedtestSession session;
+    const auto result = puls::speedtestDownload(config(), puls::Cancellation{}, optionsFor(server),
+        serversFor(server), session, [&release, &progressTicks](const QJsonObject&) {
+            if (progressTicks.fetch_add(1) == 0) release.store(true);
+        });
+    expect(result.value("status").toString() == "ok", "controlled download completes at the measurement deadline");
+    expect(progressTicks.load() > 0 && release.load(), "controlled response is released by the first progress tick");
+    expect(result.value("bytes").toVariant().toLongLong() == 1024,
+           "download counts exactly the bytes streamed after the first progress tick");
 }
 
 void testDownloadRejectsUnsafeType() {
@@ -281,6 +317,7 @@ void testCancellationAbortsDownloadPromptly() {
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     testDownloadExactBytesAndRefresh();
+    testDownloadCountsOnlyBytesReceivedDuringMeasurement();
     testDownloadRejectsUnsafeType();
     testDownloadRejectsEncodingAndServerError();
     testDownloadRefreshesAfterUnauthorized();
