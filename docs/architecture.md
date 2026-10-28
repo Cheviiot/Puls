@@ -1,5 +1,26 @@
 # Архитектура
 
+## C++ / Qt
+
+Новая реализация использует C++20 и Qt Widgets. CLI и GUI вызывают один
+`puls::Runner` из `cpp/src/core.cpp`; GUI получает копии событий через очередь
+Qt, а сетевые объекты принадлежат потоку Runner. Конкурентный engine находится
+в `cpp/src/transfer.cpp`, discovery/ping — в `backend.cpp`, throughput каждого
+сервиса — в отдельном файле. CLI/JSON schema 1 и правила учёта подтверждённых
+байтов совпадают с reference-контрактом.
+
+GUI создан с нуля: выбор сервиса, адаптивные показатели, отдельные параметры
+и закреплённая кнопка запуска/остановки. Настройки сохраняются по whitelist;
+данные подключения, результаты и credentials не записываются. Отмена закрывает
+I/O; Runner возвращает управление после завершения workers.
+
+Native runtime развёртывается через `cmake/PulsDeployment.cmake`; архивы,
+manifest schema 2 и checksums создаёт `scripts/release_cpp.py`. Release workflow
+вызывает reusable C++ проверки, desktop и Qt Android workflows. Подробности:
+[сборка и проверка C++](cpp-migration.md).
+
+## Go / Fyne reference
+
 Puls имеет два интерфейса над одним application-слоем:
 
 ```text
