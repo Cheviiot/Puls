@@ -149,6 +149,13 @@ jobs:
       - name: Verify checksums
         working-directory: dist
         run: sha256sum -c SHA256SUMS.txt
+      - name: Save the complete preflight package set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: puls-release-${{ needs.validate.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
       - name: Attest artifacts
         if: github.event_name == 'push'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
