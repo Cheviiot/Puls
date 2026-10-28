@@ -31,7 +31,11 @@ OpenSSL runtime location into the additional ABI build.
 Qt's Android TLS plugin requires separately packaged OpenSSL libraries.
 `ci/build_openssl.sh` uses the same NDK as Qt to build both ABIs and installs
 `libcrypto_3.so`, `libssl_3.so`, and the upstream license under the selected
-build directory. Both the application and OpenSSL use 16 KiB ELF alignment;
+build directory. The inherited Android targets in `openssl.cnf` set
+`shlib_variant=_3`, so the final filenames, SONAMEs and `libssl` dependency are
+created by the linker. No post-link ELF rewriting is needed. The helper checks
+these names and every load segment before Qt/Gradle packaging.
+Both the application and OpenSSL use 16 KiB ELF alignment;
 the APK verifier checks all packaged native libraries and ZIP alignment.
 The [Qt OpenSSL documentation](https://doc.qt.io/qt-6.12/android-openssl-support.html)
 explains the `_3` suffix and why Android's private TLS libraries cannot be used.

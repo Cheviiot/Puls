@@ -1,0 +1,13 @@
+# OpenSSL configuration target extension. Keep the Android NDK target settings,
+# but produce the final Qt runtime filename, SONAME and dependencies at link time.
+# See OpenSSL Configurations/README.md, shlib_variant.
+my %targets = (
+    "puls-android-arm64" => {
+        inherit_from => [ "android-arm64" ],
+        shlib_variant => "_3",
+    },
+    "puls-android-x86_64" => {
+        inherit_from => [ "android-x86_64" ],
+        shlib_variant => "_3",
+    },
+);
