@@ -176,5 +176,9 @@ if(BUILD_TESTING AND NOT ANDROID)
     endif()
 endif()
 
-install(TARGETS puls BUNDLE DESTINATION . RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# On Android qt_add_executable creates an application MODULE library, which
+# androiddeployqt packages through the apk target rather than desktop install.
+if(NOT ANDROID)
+    install(TARGETS puls BUNDLE DESTINATION . RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 include(cmake/PulsDeployment.cmake)
