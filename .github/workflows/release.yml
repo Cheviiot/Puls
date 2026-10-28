@@ -84,16 +84,20 @@ jobs:
       - name: Validate workflows
         run: actionlint .github/workflows/*.yml
 
+  checks:
+    name: Validate native C++ and installers
+    uses: ./.github/workflows/cpp.yml
+
   desktop:
     name: Build desktop release packages
-    needs: validate
+    needs: [validate, checks]
     uses: ./.github/workflows/cpp-release.yml
     with:
       version: ${{ needs.validate.outputs.version }}
 
   android:
     name: Build signed Android release package
-    needs: validate
+    needs: [validate, checks]
     uses: ./.github/workflows/cpp-android.yml
     with:
       version: ${{ needs.validate.outputs.version }}
