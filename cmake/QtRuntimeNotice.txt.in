@@ -1,0 +1,19 @@
+Qt runtime in Puls
+
+This distribution includes dynamically linked Qt @Qt6_VERSION@ libraries and
+plugins deployed by the official Qt CMake deployment API. The unmodified Qt
+license texts are in the Qt/ directory. Additional notices supplied by the build
+SDK, when available, are preserved in Qt/sdk/.
+
+Qt is developed by The Qt Company and the Qt community. Qt's licensing information
+and source code are available from the official project:
+https://www.qt.io/licensing/open-source-lgpl-obligations
+https://code.qt.io/cgit/qt/
+https://download.qt.io/archive/qt/
+
+Qt license texts included by Puls are copied without modification from the Qt
+SDK's LICENSES files. Their original names identify their SPDX license variants.
+They are notices for Qt; the Puls application license is in the adjacent LICENSE.
+
+On Linux, the C library, ELF loader, graphics drivers, system fonts and CA trust
+store are provided by the target operating system.

@@ -1,0 +1,37 @@
+# A system Qt SDK can have no library RPATH and absolute DT_NEEDED entries.
+# The official Qt deployment script copies those files; make their references
+# relative as well, otherwise transitive dependencies still resolve to the SDK.
+set(puls_prefix "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+set(puls_library_dir "${puls_prefix}/@CMAKE_INSTALL_LIBDIR@")
+# Qt 6.8/6.9 do not expose EXCLUDE_PLUGINS in the deployment API. Puls has a
+# native Qt theme and must not acquire a GTK runtime through this optional theme.
+file(REMOVE "${puls_prefix}/@PULS_RUNTIME_PLUGINS_DIR@/platformthemes/libqgtk3.so")
+file(GLOB_RECURSE puls_runtime_libraries LIST_DIRECTORIES FALSE
+    "${puls_library_dir}/*.so*" "${puls_prefix}/@PULS_RUNTIME_PLUGINS_DIR@/*.so*")
+foreach(library IN LISTS puls_runtime_libraries)
+    if(IS_SYMLINK "${library}")
+        continue()
+    endif()
+    get_filename_component(directory "${library}" DIRECTORY)
+    file(RELATIVE_PATH relative_libraries "${directory}" "${puls_library_dir}")
+    if(relative_libraries STREQUAL "")
+        set(rpath "$ORIGIN")
+    else()
+        set(rpath "$ORIGIN/${relative_libraries}")
+    endif()
+    execute_process(COMMAND "@PULS_PATCHELF_EXECUTABLE@" --set-rpath "${rpath}" "${library}"
+        COMMAND_ERROR_IS_FATAL ANY)
+    execute_process(COMMAND "@PULS_PATCHELF_EXECUTABLE@" --print-needed "${library}"
+        OUTPUT_VARIABLE dependencies OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
+    string(REPLACE "\n" ";" dependencies "${dependencies}")
+    foreach(dependency IN LISTS dependencies)
+        if(IS_ABSOLUTE "${dependency}")
+            get_filename_component(name "${dependency}" NAME)
+            if(NOT EXISTS "${puls_library_dir}/${name}")
+                message(FATAL_ERROR "Absolute runtime dependency cannot be relocated: ${dependency}")
+            endif()
+            execute_process(COMMAND "@PULS_PATCHELF_EXECUTABLE@" --replace-needed "${dependency}" "${name}" "${library}"
+                COMMAND_ERROR_IS_FATAL ANY)
+        endif()
+    endforeach()
+endforeach()
