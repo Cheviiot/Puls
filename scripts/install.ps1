@@ -157,27 +157,32 @@ function Install-RuntimeTree {
     $shimBackup = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".cmd")
     $legacyExe = Join-Path $InstallDir "puls.exe"
     $legacyBackup = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".exe")
-    $movedVersion = $false; $movedCurrent = $false; $madeCurrent = $false
+    $movedVersion = $false; $movedCurrent = $false; $madeCurrent = $false; $newVersionInstalled = $false
     $movedShim = $false; $madeShim = $false; $movedLegacy = $false; $hasOldShim = $false
     try {
         Copy-Item -Recurse -Force -LiteralPath $Source -Destination $stage
         Set-Content -Encoding ASCII -NoNewline -LiteralPath (Join-Path $stage ".puls-runtime-owner") -Value "puls-installer-v1:$RuntimeVersion"
         $runtimeExe = Join-Path $stage "bin\puls.exe"
         if (-not (Test-Path -LiteralPath $runtimeExe -PathType Leaf)) { throw (Get-Message -Name BinaryMissing) }
+        $global:LASTEXITCODE = 0
+        try { & $runtimeExe --version *> $null } catch { throw "Runtime executable failed its --version check." }
+        if ($LASTEXITCODE -ne 0) { throw "Runtime executable failed its --version check." }
+        $hadCurrent = Test-Path -LiteralPath $current
+        if ($hadCurrent -and $null -eq (Get-OwnedCurrentRuntime -RuntimeRoot $runtimeRoot)) { throw "Current runtime is not managed by Puls" }
+        if ($hadCurrent) {
+            $movedCurrent = $true
+            Move-Item -LiteralPath $current -Destination $currentBackup | Out-Null
+        }
         if (Test-Path -LiteralPath $versionPath) {
             if (-not (Test-OwnedRuntime -Path $versionPath -RuntimeVersion $RuntimeVersion)) { throw "Runtime version already exists and is not managed by Puls" }
-            Move-Item -Force -LiteralPath $versionPath -Destination $versionBackup | Out-Null
             $movedVersion = $true
+            Move-Item -Force -LiteralPath $versionPath -Destination $versionBackup | Out-Null
         }
+        $newVersionInstalled = $true
         Move-Item -LiteralPath $stage -Destination $versionPath | Out-Null
 
-        if (Test-Path -LiteralPath $current) {
-            if ($null -eq (Get-OwnedCurrentRuntime -RuntimeRoot $runtimeRoot)) { throw "Current runtime is not managed by Puls" }
-            Move-Item -LiteralPath $current -Destination $currentBackup | Out-Null
-            $movedCurrent = $true
-        }
-        New-Item -ItemType Junction -Path $current -Target $versionPath | Out-Null
         $madeCurrent = $true
+        New-Item -ItemType Junction -Path $current -Target $versionPath | Out-Null
 
         if (Test-Path -LiteralPath $shim) {
             if ((Get-Item -Force -LiteralPath $shim).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw "puls.cmd must be a regular file" }
@@ -214,12 +219,20 @@ function Install-RuntimeTree {
         return (Join-Path $InstallDir "puls.cmd")
     } catch {
         if ($madeShim -and (Test-Path -LiteralPath $shim)) { Remove-Item -Force -LiteralPath $shim }
-        if ($movedShim -and (Test-Path -LiteralPath $shimBackup)) { Move-Item -LiteralPath $shimBackup -Destination $shim | Out-Null }
-        if ($movedLegacy -and (Test-Path -LiteralPath $legacyBackup)) { Move-Item -LiteralPath $legacyBackup -Destination $legacyExe | Out-Null }
-        if ($madeCurrent -and (Test-Path -LiteralPath $current)) { Remove-Item -Force -LiteralPath $current }
-        if ($movedCurrent -and (Test-Path -LiteralPath $currentBackup)) { Move-Item -LiteralPath $currentBackup -Destination $current | Out-Null }
-        if (Test-Path -LiteralPath $versionPath) { Remove-Item -Recurse -Force -LiteralPath $versionPath }
-        if ($movedVersion -and (Test-Path -LiteralPath $versionBackup)) { Move-Item -LiteralPath $versionBackup -Destination $versionPath | Out-Null }
+        if (Test-Path -LiteralPath $shimBackup) {
+            if (Test-Path -LiteralPath $shim) { Remove-Item -Force -LiteralPath $shim }
+            Move-Item -LiteralPath $shimBackup -Destination $shim | Out-Null
+        }
+        if (Test-Path -LiteralPath $legacyBackup) { Move-Item -LiteralPath $legacyBackup -Destination $legacyExe | Out-Null }
+        if ($madeCurrent -and (Test-Path -LiteralPath $current) -and
+            [string]::Equals((Get-OwnedCurrentRuntime -RuntimeRoot $runtimeRoot), [IO.Path]::GetFullPath($versionPath), [StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -Force -LiteralPath $current
+        }
+        if ($newVersionInstalled -and (Test-OwnedRuntime -Path $versionPath -RuntimeVersion $RuntimeVersion)) {
+            Remove-Item -Recurse -Force -LiteralPath $versionPath
+        }
+        if (Test-Path -LiteralPath $versionBackup) { Move-Item -LiteralPath $versionBackup -Destination $versionPath | Out-Null }
+        if (Test-Path -LiteralPath $currentBackup) { Move-Item -LiteralPath $currentBackup -Destination $current | Out-Null }
         throw
     } finally {
         if (Test-Path -LiteralPath $stage) { Remove-Item -Recurse -Force -LiteralPath $stage }

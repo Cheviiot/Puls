@@ -27,7 +27,9 @@ function New-TestRelease([string]$Version, [string]$Label) {
     $packageName = "Puls_${Version}_windows_amd64"
     $packageRoot = Join-Path $scratch $packageName
     New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot "bin"), (Join-Path $packageRoot "lib"), (Join-Path $packageRoot "plugins"), (Join-Path $packageRoot "assets") | Out-Null
-    [IO.File]::WriteAllText((Join-Path $packageRoot "bin\puls.exe"), $Label, [Text.Encoding]::ASCII)
+    $className = "PulsSmoke" + [Guid]::NewGuid().ToString("N")
+    $smokeSource = 'public static class {0} { public static int Main(string[] args) { System.Console.WriteLine("Puls runtime smoke"); return 0; } }' -f $className
+    Add-Type -TypeDefinition $smokeSource -Language CSharp -OutputType ConsoleApplication -OutputAssembly (Join-Path $packageRoot "bin\puls.exe")
     [IO.File]::WriteAllText((Join-Path $packageRoot "lib\runtime.data"), "runtime $Label", [Text.Encoding]::ASCII)
     [IO.File]::WriteAllText((Join-Path $packageRoot "plugins\runtime.plugin"), "plugin $Label", [Text.Encoding]::ASCII)
     [IO.File]::WriteAllText((Join-Path $packageRoot "assets\Icon.ico"), "icon $Label", [Text.Encoding]::ASCII)
@@ -115,6 +117,8 @@ try {
     Invoke-TestInstaller @("-Version", "2.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null
     if ((Resolve-Path -LiteralPath $current).Path -notlike "*\versions\2.0.0") { throw "Runtime update did not switch current." }
     if (Test-Path -LiteralPath (Join-Path $installDir ".puls-runtime\versions\1.0.0")) { throw "Old owned runtime was not cleaned up." }
+    Invoke-TestInstaller @("-Version", "2.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null
+    if ((Resolve-Path -LiteralPath $current).Path -notlike "*\versions\2.0.0") { throw "Same-version runtime reinstall failed." }
 
     [IO.File]::WriteAllText((Join-Path $installDir "puls.cmd"), "@echo off`r`nREM user replacement`r`n", [Text.Encoding]::ASCII)
     try { Invoke-TestInstaller @("-Version", "3.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null; throw "Expected unmanaged shim rejection." }

@@ -23,7 +23,7 @@ VERSION = "1.0.0"
 ARCHIVE = f"Puls_{VERSION}_linux_amd64.tar.gz"
 
 
-def make_archive(version: str, payload: str, *, legacy: bool = False, traversal: bool = False, escaping_link: bool = False) -> bytes:
+def make_archive(version: str, payload: str, *, legacy: bool = False, traversal: bool = False, escaping_link: bool = False, link_chain: bool = False, smoke_failure: bool = False) -> bytes:
     name = f"Puls_{version}_linux_amd64"
     stream = io.BytesIO()
     with tarfile.open(fileobj=stream, mode="w:gz", format=tarfile.PAX_FORMAT) as archive:
@@ -35,7 +35,7 @@ def make_archive(version: str, payload: str, *, legacy: bool = False, traversal:
                 if item.is_file():
                     relative = item.relative_to(FIXTURE).as_posix()
                     files[relative] = item.read_bytes()
-            files["bin/puls"] = f"#!/bin/sh\nprintf '{payload}\\n'\n".encode()
+            files["bin/puls"] = (b"#!/bin/sh\nexit 42\n" if smoke_failure else f"#!/bin/sh\nprintf '{payload}\\n'\n".encode())
         for relative, data in files.items():
             info = tarfile.TarInfo(f"{name}/{relative}")
             info.mode = 0o755 if relative.endswith("/puls") else 0o644
@@ -44,8 +44,21 @@ def make_archive(version: str, payload: str, *, legacy: bool = False, traversal:
         if not legacy:
             link = tarfile.TarInfo(f"{name}/lib/libfixture.so")
             link.type = tarfile.SYMTYPE
-            link.linkname = "../../outside" if escaping_link else "runtime.data"
+            link.linkname = "../../../outside" if escaping_link else "runtime.data"
             archive.addfile(link)
+            if link_chain:
+                first = tarfile.TarInfo(f"{name}/lib/link")
+                first.type = tarfile.SYMTYPE
+                first.linkname = "chain"
+                archive.addfile(first)
+                second = tarfile.TarInfo(f"{name}/lib/chain")
+                second.type = tarfile.SYMTYPE
+                second.linkname = "../../../../victim"
+                archive.addfile(second)
+                child = tarfile.TarInfo(f"{name}/lib/link/payload")
+                child_data = b"must not escape"
+                child.size = len(child_data)
+                archive.addfile(child, io.BytesIO(child_data))
         if traversal:
             hostile = tarfile.TarInfo(f"{name}/../escape.txt")
             hostile_data = b"escape"
@@ -113,6 +126,7 @@ class RuntimeInstallerTests(unittest.TestCase):
         self.install = self.root / "custom install"
         self.home.mkdir()
         self.install.mkdir()
+        (self.root / "victim").mkdir()
         (self.install / "keep.txt").write_text("user data\n", encoding="utf-8")
         self.releases = {
             "1.0.0": release_files("1.0.0", "Puls_1.0.0_linux_amd64.tar.gz", make_archive("1.0.0", "runtime one")),
@@ -121,6 +135,8 @@ class RuntimeInstallerTests(unittest.TestCase):
             "0.9.0": release_files("0.9.0", "Puls_0.9.0_linux_amd64.tar.gz", make_archive("0.9.0", "unused", legacy=True)),
             "4.0.0": release_files("4.0.0", "Puls_4.0.0_linux_amd64.tar.gz", make_archive("4.0.0", "unused", traversal=True)),
             "5.0.0": release_files("5.0.0", "Puls_5.0.0_linux_amd64.tar.gz", make_archive("5.0.0", "unused", escaping_link=True)),
+            "6.0.0": release_files("6.0.0", "Puls_6.0.0_linux_amd64.tar.gz", make_archive("6.0.0", "unused", smoke_failure=True)),
+            "7.0.0": release_files("7.0.0", "Puls_7.0.0_linux_amd64.tar.gz", make_archive("7.0.0", "unused", link_chain=True)),
         }
         ReleaseHandler.releases = self.releases
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ReleaseHandler)
@@ -134,15 +150,20 @@ class RuntimeInstallerTests(unittest.TestCase):
         self.server_thread.join(timeout=2)
         self.temp.cleanup()
 
-    def run_installer(self, version: str, *extra: str, expect_ok: bool = True) -> subprocess.CompletedProcess[str]:
+    def run_installer(self, version: str, *extra: str, expect_ok: bool = True, install_dir: Path | None = None, path_prefix: Path | None = None, fail_move: str = "") -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
             HOME=str(self.home),
             SHELL="/bin/bash",
             XDG_DATA_HOME=str(self.home / ".local" / "share"),
-            PULS_INSTALL_DIR=str(self.install),
+            TMPDIR=str(self.root),
+            PULS_INSTALL_DIR=str(install_dir or self.install),
             PULS_INSTALL_REPOSITORY_URL=self.url,
         )
+        if path_prefix is not None:
+            env["PATH"] = str(path_prefix) + os.pathsep + env["PATH"]
+        if fail_move:
+            env["PULS_TEST_FAIL_MOVE"] = fail_move
         command = ["sh", str(ROOT / "scripts" / "install.sh"), "--version", version, "--no-path-update", *extra]
         result = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
         if expect_ok and result.returncode:
@@ -150,6 +171,14 @@ class RuntimeInstallerTests(unittest.TestCase):
         if not expect_ok and result.returncode == 0:
             self.fail(f"installer unexpectedly succeeded:\n{result.stdout}\n{result.stderr}")
         return result
+
+    def command_wrapper(self, name: str, content: str) -> Path:
+        wrapper_dir = self.root / f"wrappers-{name}-{len(list(self.root.glob('wrappers-*')))}"
+        wrapper_dir.mkdir()
+        executable = wrapper_dir / name
+        executable.write_text(content, encoding="utf-8")
+        executable.chmod(0o755)
+        return wrapper_dir
 
     def test_runtime_install_update_rollback_and_uninstall(self) -> None:
         self.run_installer("1.0.0", "--no-shortcut")
@@ -160,6 +189,30 @@ class RuntimeInstallerTests(unittest.TestCase):
         self.assertEqual((self.install / ".puls-runtime/versions/1.0.0/lib/runtime.data").read_text(), "fixture library payload\n")
         self.assertTrue((self.install / ".puls-runtime/versions/1.0.0/lib/libfixture.so").is_symlink())
         self.assertFalse((self.home / ".local/share/applications/io.github.cheviiot.puls.desktop").exists())
+
+        cp_wrapper = self.command_wrapper("cp", "#!/bin/sh\nif [ \"$1\" = -R ]; then exit 41; fi\nexec /usr/bin/cp \"$@\"\n")
+        chmod_wrapper = self.command_wrapper("chmod", "#!/bin/sh\ncase \"$*\" in *'/.stage.'*) exit 42;; esac\nexec /usr/bin/chmod \"$@\"\n")
+        mv_wrapper = self.command_wrapper(
+            "mv",
+            "#!/bin/sh\nsource_path=; destination=\nfor arg do source_path=$destination; destination=$arg; done\n"
+            "if [ \"${PULS_TEST_FAIL_MOVE:-}\" = stage ] && case \"$source_path:$destination\" in *'/.stage.'*'/versions/1.0.0') true;; *) false;; esac; then /usr/bin/mv \"$@\"; exit 43; fi\n"
+            "if [ \"${PULS_TEST_FAIL_MOVE:-}\" = launcher ] && [ \"$destination\" = \"$PULS_INSTALL_DIR/puls\" ]; then /usr/bin/mv \"$@\"; exit 44; fi\n"
+            "exec /usr/bin/mv \"$@\"\n",
+        )
+        for tool_wrapper, fail_move in ((cp_wrapper, ""), (chmod_wrapper, ""), (mv_wrapper, "stage")):
+            result = self.run_installer("1.0.0", "--no-shortcut", expect_ok=False, path_prefix=tool_wrapper, fail_move=fail_move)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual((self.install / ".puls-runtime/versions/1.0.0/.puls-runtime-owner").read_text().strip(), "puls-installer-v1:1.0.0")
+            self.assertEqual(subprocess.check_output([launcher], text=True), "runtime one\n")
+            self.assertEqual((self.install / "keep.txt").read_text(), "user data\n")
+        self.run_installer("1.0.0", "--no-shortcut")
+
+        result = self.run_installer("2.0.0", "--no-shortcut", expect_ok=False, path_prefix=mv_wrapper, fail_move="launcher")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(launcher.is_symlink())
+        self.assertEqual(os.readlink(launcher), ".puls-runtime/current/bin/puls")
+        self.assertEqual((self.install / ".puls-runtime/current").resolve().name, "1.0.0")
+        self.assertEqual(subprocess.check_output([launcher], text=True), "runtime one\n")
 
         self.run_installer("2.0.0", "--no-shortcut")
         self.assertEqual((self.install / ".puls-runtime/current").resolve().name, "2.0.0")
@@ -205,9 +258,39 @@ class RuntimeInstallerTests(unittest.TestCase):
 
     def test_runtime_symlink_cannot_escape_version_directory(self) -> None:
         result = self.run_installer("5.0.0", "--no-shortcut", expect_ok=False)
-        self.assertIn("runtime содержит ссылку за пределы каталога", result.stderr)
+        self.assertIn("архив содержит небезопасные ссылки", result.stderr)
         self.assertFalse((self.install / ".puls-runtime/versions/5.0.0").exists())
         self.assertFalse((self.root / "outside").exists())
+
+    def test_smoke_failure_keeps_active_runtime_and_link_chain_is_rejected_pre_extract(self) -> None:
+        self.run_installer("1.0.0", "--no-shortcut")
+        result = self.run_installer("6.0.0", "--no-shortcut", expect_ok=False)
+        self.assertIn("--version", result.stderr)
+        self.assertEqual((self.install / ".puls-runtime/current").resolve().name, "1.0.0")
+        self.assertEqual(subprocess.check_output([self.install / "puls"], text=True), "runtime one\n")
+
+        result = self.run_installer("7.0.0", "--no-shortcut", expect_ok=False)
+        self.assertIn("архив содержит небезопасные ссылки", result.stderr)
+        self.assertFalse((self.root / "victim/payload").exists())
+        self.assertFalse((self.install / ".puls-runtime/versions/7.0.0").exists())
+
+    def test_first_install_failure_after_pointer_swap_removes_unbacked_current(self) -> None:
+        first_install = self.root / "first-install"
+        first_install.mkdir()
+        (first_install / "keep.txt").write_text("keep\n", encoding="utf-8")
+        wrapper = self.command_wrapper(
+            "mv",
+            "#!/bin/sh\ndestination=; for arg do destination=$arg; done\n"
+            "if [ \"$destination\" = \"$PULS_INSTALL_DIR/puls\" ]; then /usr/bin/mv \"$@\"; exit 45; fi\nexec /usr/bin/mv \"$@\"\n",
+        )
+        result = self.run_installer("1.0.0", "--no-shortcut", expect_ok=False, install_dir=first_install, path_prefix=wrapper)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((first_install / ".puls-runtime/current").exists())
+        self.assertFalse((first_install / ".puls-runtime/versions/1.0.0").exists())
+        self.assertFalse((first_install / "puls").exists())
+        self.assertEqual((first_install / "keep.txt").read_text(), "keep\n")
+        self.run_installer("1.0.0", "--no-shortcut", install_dir=first_install)
+        self.assertEqual(subprocess.check_output([first_install / "puls"], text=True), "runtime one\n")
 
 
 if __name__ == "__main__":

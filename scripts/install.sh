@@ -24,6 +24,12 @@ runtime_pointer_temp=""
 runtime_launcher_temp=""
 runtime_committed=0
 runtime_new_version=""
+runtime_version_installed=0
+runtime_version_backup_ready=0
+runtime_pointer_changed=0
+runtime_pointer_backup_ready=0
+runtime_launcher_changed=0
+runtime_launcher_backup_ready=0
 
 say() {
   printf '%s\n' "$*"
@@ -62,6 +68,35 @@ validate_archive_members() {
       if (name != root && index(name, prefix) != 1) exit 1
     }
   ' || fail "архив содержит небезопасные пути"
+}
+
+validate_archive_links() {
+  links_archive=$1
+  links_root=$2
+  tar -tvzf "$links_archive" | awk -v root="$links_root" '
+    $1 ~ /^h/ { exit 1 }
+    $1 ~ /^l/ {
+      arrow = index($0, " -> ")
+      if (arrow == 0) exit 1
+      metadata = substr($0, 1, arrow - 1)
+      target = substr($0, arrow + 4)
+      needle = root "/"
+      start = index(metadata, needle)
+      if (start == 0 || target == "" || target ~ /^\// || target ~ /^[A-Za-z]:/ || target ~ /[\\\\]/) exit 1
+      relative = substr(metadata, start + length(needle))
+      base = relative
+      if (sub(/\/[^\/]*$/, "", base) == 0) base = ""
+      depth = 0
+      count = split(base, parts, "/")
+      for (i = 1; i <= count; i++) if (parts[i] != "" && parts[i] != ".") stack[++depth] = parts[i]
+      count = split(target, parts, "/")
+      for (i = 1; i <= count; i++) {
+        if (parts[i] == "" || parts[i] == ".") continue
+        if (parts[i] == "..") { if (depth == 0) exit 1; depth-- }
+        else stack[++depth] = parts[i]
+      }
+    }
+  ' || fail "архив содержит небезопасные ссылки"
 }
 
 runtime_pointer_target() {
@@ -112,20 +147,27 @@ install_runtime_tree() {
     fail "в runtime отсутствует исполняемый файл"
   fi
   chmod 0755 "$runtime_stage/$runtime_executable"
-
-  if [ -e "$runtime_version_dir" ] || [ -L "$runtime_version_dir" ]; then
-    runtime_owned "$runtime_version_dir" "$version" || fail "версия runtime уже существует и не принадлежит установщику Puls"
-    mv "$runtime_version_dir" "$runtime_backup_version" || fail "не удалось сохранить прежнюю версию runtime"
-  fi
-  mv "$runtime_stage" "$runtime_version_dir" || fail "не удалось установить runtime"
-  runtime_stage=""
+  "$runtime_stage/$runtime_executable" --version >/dev/null 2>&1 || \
+    fail "runtime не прошёл проверку --version"
 
   if [ -e "$runtime_current" ] || [ -L "$runtime_current" ]; then
     runtime_pointer_target "$runtime_current" || fail "указатель runtime существует, но не принадлежит установщику Puls"
+    runtime_pointer_backup_ready=1
     ln -s "$(readlink "$runtime_current")" "$runtime_backup_current" || fail "не удалось сохранить прежний runtime"
   fi
+
+  if [ -e "$runtime_version_dir" ] || [ -L "$runtime_version_dir" ]; then
+    runtime_owned "$runtime_version_dir" "$version" || fail "версия runtime уже существует и не принадлежит установщику Puls"
+    runtime_version_backup_ready=1
+    mv "$runtime_version_dir" "$runtime_backup_version" || fail "не удалось сохранить прежнюю версию runtime"
+  fi
+  runtime_version_installed=1
+  mv "$runtime_stage" "$runtime_version_dir" || fail "не удалось установить runtime"
+  runtime_stage=""
+
   runtime_pointer_temp=$runtime_root/.current.$$.tmp
   ln -s "versions/$version" "$runtime_pointer_temp" || fail "не удалось подготовить указатель runtime"
+  runtime_pointer_changed=1
   replace_symlink_atomically "$runtime_pointer_temp" "$runtime_current" || fail "не удалось переключить runtime"
   runtime_pointer_temp=""
 
@@ -136,7 +178,10 @@ install_runtime_tree() {
         .puls-runtime/current/*) ;;
         *) fail "$target_binary уже существует и не принадлежит установщику Puls" ;;
       esac
+      runtime_launcher_backup_ready=1
+      ln -s "$(readlink "$target_binary")" "$runtime_backup_launcher" || fail "не удалось сохранить прежнюю команду puls"
     elif [ -f "$target_binary" ]; then
+      runtime_launcher_backup_ready=1
       mv "$target_binary" "$runtime_backup_launcher" || fail "не удалось сохранить прежнюю команду puls"
     else
       fail "$target_binary не является обычным файлом"
@@ -148,7 +193,8 @@ install_runtime_tree() {
     *) launcher_target=.puls-runtime/current/bin/puls ;;
   esac
   ln -s "$launcher_target" "$runtime_launcher_temp" || fail "не удалось подготовить команду puls"
-  mv "$runtime_launcher_temp" "$target_binary" || fail "не удалось установить команду puls"
+  runtime_launcher_changed=1
+  replace_symlink_atomically "$runtime_launcher_temp" "$target_binary" || fail "не удалось установить команду puls"
   runtime_launcher_temp=""
   runtime_committed=1
   rm -f -- "$runtime_backup_current" "$runtime_backup_launcher" 2>/dev/null || :
@@ -167,26 +213,40 @@ install_runtime_tree() {
   runtime_backup_launcher=""
   runtime_backup_version=""
   runtime_new_version=""
+  runtime_version_installed=0
+  runtime_version_backup_ready=0
+  runtime_pointer_changed=0
+  runtime_pointer_backup_ready=0
+  runtime_launcher_changed=0
+  runtime_launcher_backup_ready=0
 }
 
 cleanup() {
   cleanup_status=$?
   trap - EXIT
   if [ "$runtime_committed" -ne 1 ]; then
-    if [ -n "$runtime_new_version" ] && runtime_owned "$runtime_new_version" "$version"; then
+    if [ "$runtime_launcher_changed" -eq 1 ]; then
+      rm -f -- "$install_dir/puls" || :
+    fi
+    if [ "$runtime_launcher_backup_ready" -eq 1 ] && { [ -e "$runtime_backup_launcher" ] || [ -L "$runtime_backup_launcher" ]; }; then
+      if [ -L "$runtime_backup_launcher" ]; then
+        replace_symlink_atomically "$runtime_backup_launcher" "$install_dir/puls" || :
+      else
+        mv "$runtime_backup_launcher" "$install_dir/puls" || :
+      fi
+    fi
+    if [ "$runtime_pointer_changed" -eq 1 ]; then
+      rm -f -- "$install_dir/.puls-runtime/current" || :
+    fi
+    if [ "$runtime_version_installed" -eq 1 ] && [ -n "$runtime_new_version" ] && runtime_owned "$runtime_new_version" "$version"; then
       rm -rf -- "$runtime_new_version" || :
     fi
-    if [ -n "$runtime_backup_launcher" ] && [ -e "$runtime_backup_launcher" ]; then
-      rm -f -- "$install_dir/puls" || :
-      mv "$runtime_backup_launcher" "$install_dir/puls" || :
-    fi
-    if [ -n "$runtime_backup_current" ] && [ -e "$runtime_backup_current" ]; then
-      rm -f -- "$install_dir/.puls-runtime/current" || :
-      mv "$runtime_backup_current" "$install_dir/.puls-runtime/current" || :
-    fi
-    if [ -n "$runtime_backup_version" ] && [ -e "$runtime_backup_version" ]; then
+    if [ "$runtime_version_backup_ready" -eq 1 ] && [ -e "$runtime_backup_version" ]; then
       rm -rf -- "${runtime_versions:?}/$version" || :
       mv "$runtime_backup_version" "$runtime_versions/$version" || :
+    fi
+    if [ "$runtime_pointer_backup_ready" -eq 1 ] && { [ -e "$runtime_backup_current" ] || [ -L "$runtime_backup_current" ]; }; then
+      replace_symlink_atomically "$runtime_backup_current" "$install_dir/.puls-runtime/current" || :
     fi
   fi
   if [ -n "$temporary_dir" ]; then
@@ -825,9 +885,7 @@ fi
 
 if [ -n "$runtime_member" ]; then
   validate_archive_members "$archive_path" "$package_dir"
-  if tar -tvzf "$archive_path" | awk '$1 ~ /^h/ { found = 1 } END { exit !found }'; then
-    fail "архив содержит неподдерживаемые hard links"
-  fi
+  validate_archive_links "$archive_path" "$package_dir"
   tar -xzf "$archive_path" -C "$extract_dir" --no-same-owner || \
     fail "не удалось извлечь runtime из пакета"
   runtime_tree=$extract_dir/$package_dir
