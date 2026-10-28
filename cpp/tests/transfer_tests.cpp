@@ -335,6 +335,45 @@ void testCallbackExceptionsJoinWorkers() {
            "adaptive callback exception becomes internal error");
     expect(exited.load(), "adaptive callback exception joins worker before return");
 }
+
+void testTransferDiagnosticsSurviveFailedPhase() {
+    RunResult failedRun;
+    failedRun.bytes = 123;
+    failedRun.elapsedSeconds = 0.25;
+    failedRun.workersOK = 1;
+    failedRun.workersFailed = 1;
+    failedRun.workerErrors.append(puls::OpError("unavailable", "download", "one worker failed", true));
+    failedRun.error.emplace("canceled", "download", "measurement canceled");
+
+    QJsonObject failedPhase;
+    try {
+        (void)puls::transfer::phaseResult(failedRun, "http");
+        expect(false, "failed transfer phase rethrows its operation error");
+    } catch (const puls::OpError& error) {
+        failedPhase = puls::failedPhase(error);
+    }
+    expect(failedPhase.value("status").toString() == "canceled", "failed transfer keeps canceled phase status");
+    expect(failedPhase.value("bytes").toInt() == 123, "failed phase preserves confirmed bytes");
+    expect(failedPhase.value("elapsed_ms").toDouble() == 250.0, "failed phase preserves measured elapsed time");
+    expect(failedPhase.value("successful_streams").toInt() == 1 &&
+           failedPhase.value("failed_streams").toInt() == 1,
+           "failed phase preserves successful and failed worker counts");
+    expect(failedPhase.value("warnings").toArray().size() == 1,
+           "failed phase preserves partial worker warnings");
+    expect(failedPhase.value("mbps").isNull() && failedPhase.value("method").isNull(),
+           "failed transfer leaves unavailable throughput fields null");
+    const auto errorObject = failedPhase.value("error").toObject();
+    expect(!errorObject.contains("transferDiagnostics"), "internal diagnostics are not exposed in error JSON");
+
+    RunResult successfulRun;
+    successfulRun.bytes = 123;
+    successfulRun.elapsedSeconds = 0.25;
+    successfulRun.workersOK = 1;
+    successfulRun.workersFailed = 1;
+    successfulRun.workerErrors.append(puls::OpError("unavailable", "download", "one worker failed", true));
+    const auto successfulPhase = puls::transfer::phaseResult(successfulRun, "http");
+    expect(successfulPhase.value("method").isNull(), "successful throughput phase leaves method null");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -351,6 +390,7 @@ int main(int argc, char** argv) {
     testProgressRunsOnCoordinatorAndElapsedExcludesTeardown();
     testLateCoordinatorCannotAdmitAfterDeadlineBytes();
     testCallbackExceptionsJoinWorkers();
+    testTransferDiagnosticsSurviveFailedPhase();
     if (failures) std::cerr << failures << " transfer test(s) failed\n";
     return failures == 0 ? 0 : 1;
 }
