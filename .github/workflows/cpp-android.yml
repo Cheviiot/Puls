@@ -1,0 +1,153 @@
+name: C++ Android
+
+on:
+  push:
+    branches: [main, 'codex/cpp-*']
+    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp-android.yml', 'internal/gui/assets/Icon.png']
+  pull_request:
+    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp-android.yml', 'internal/gui/assets/Icon.png']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpp-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_VERSION: '6.8.3'
+  RELEASE_VERSION: '0.4.0-cpp-dev'
+  # Keep the stable release formula: major * 1000000 + minor * 1000 + patch.
+  # This exceeds the preceding 0.3.3 APK's version code (3003).
+  ANDROID_VERSION_CODE: '4000'
+  NDK_VERSION: '26.1.10909125'
+  BUILD_TOOLS_VERSION: '35.0.0'
+  CMAKE_BUILD_PARALLEL_LEVEL: '2'
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  package:
+    name: Signed Qt Android APK
+    # Fork code never receives the existing application signing identity.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Test APK verification contracts
+        run: python3 -m unittest discover -s cpp/android/ci -p 'test_*.py' -v
+      - name: Prepare Android tools
+        shell: bash
+        run: |
+          test -d "$JAVA_HOME_17_X64"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$GITHUB_WORKSPACE/.scratch/android-gradle" >> "$GITHUB_ENV"
+          mkdir -p .scratch/android-gradle
+          printf '%s\n' 'org.gradle.workers.max=2' 'org.gradle.parallel=false' \
+            'org.gradle.jvmargs=-Xmx3g' > .scratch/android-gradle/gradle.properties
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          (set +o pipefail; yes | "$sdkmanager" --licenses >/dev/null)
+          "$sdkmanager" "ndk;$NDK_VERSION" 'platforms;android-35' "build-tools;$BUILD_TOOLS_VERSION"
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build patchelf
+      - name: Install primary Android Qt kit and host tools
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.8.3'
+          host: linux
+          target: android
+          arch: android_arm64_v8a
+          modules: qtwebsockets
+          extra: --autodesktop
+          cache: true
+      - name: Keep the primary kit path
+        shell: bash
+        run: |
+          test -x "$QT_ROOT_DIR/bin/qt-cmake"
+          echo "PULS_ANDROID_QT_ROOT=$QT_ROOT_DIR" >> "$GITHUB_ENV"
+      - name: Install Android x86_64 kit
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
+        with:
+          version: '6.8.3'
+          host: linux
+          target: android
+          arch: android_x86_64
+          modules: qtwebsockets
+          set-env: false
+          cache: true
+      - name: Build verified OpenSSL 3 for both ABIs
+        shell: bash
+        run: bash cpp/android/ci/build_openssl.sh "$GITHUB_WORKSPACE/.scratch/android-openssl"
+      - name: Build the unsigned multi-ABI release APK
+        shell: bash
+        run: |
+          "$PULS_ANDROID_QT_ROOT/bin/qt-cmake" -S . -B .scratch/android-build -GNinja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPULS_BUILD_GUI=ON \
+            -DPULS_DEPLOY_RUNTIME=OFF -DPULS_VERSION_LABEL="$RELEASE_VERSION" \
+            -DPULS_ANDROID_VERSION_CODE="$ANDROID_VERSION_CODE" \
+            -DPULS_ANDROID_OPENSSL_ROOT="$GITHUB_WORKSPACE/.scratch/android-openssl" \
+            '-DQT_ANDROID_ABIS=arm64-v8a;x86_64' -DQT_ANDROID_SIGN_APK=OFF \
+            -DQT_ANDROID_DEPLOYMENT_TYPE=RELEASE \
+            -DANDROID_SDK_ROOT="$ANDROID_HOME" -DANDROID_NDK_ROOT="$ANDROID_NDK_ROOT"
+          ionice -c 3 nice -n 19 cmake --build .scratch/android-build --target apk --parallel 2
+          test -f .scratch/android-build/android-build/puls.apk
+      - name: Sign with the existing release identity
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASS: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PULS_ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.PULS_ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          test -n "$KEYSTORE_BASE64" && test -n "$KEYSTORE_PASS"
+          test -n "$KEY_ALIAS" && test -n "$KEY_PASS"
+          umask 077
+          mkdir -p .scratch/android-signing .scratch/android-artifacts
+          keystore="$GITHUB_WORKSPACE/.scratch/android-signing/release.keystore"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          tools="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+          "$tools/zipalign" -P 16 -f 4 .scratch/android-build/android-build/puls.apk \
+            .scratch/android-signing/aligned.apk
+          "$tools/apksigner" sign --ks "$keystore" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASS --key-pass env:KEY_PASS \
+            --out ".scratch/android-artifacts/Puls_${RELEASE_VERSION}_android.apk" \
+            .scratch/android-signing/aligned.apk
+      - name: Verify release package, signature, permissions and native ABIs
+        shell: bash
+        run: |
+          python3 cpp/android/ci/verify_apk.py \
+            --apk ".scratch/android-artifacts/Puls_${RELEASE_VERSION}_android.apk" \
+            --build-tools "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION" \
+            --version "$RELEASE_VERSION" --version-code "$ANDROID_VERSION_CODE" \
+            --output .scratch/android-artifacts/package.json
+      - name: Enable disposable emulator acceleration
+        shell: bash
+        run: |
+          test -e /dev/kvm
+          sudo chmod 0666 /dev/kvm
+      - name: Launch the signed GUI in an x86_64 emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          cores: 2
+          ram-size: 2048M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          script: python3 cpp/android/ci/smoke.py --serial emulator-5554 --apk ".scratch/android-artifacts/Puls_${RELEASE_VERSION}_android.apk" --output .scratch/android-artifacts/emulator
+      - name: Remove private signing intermediates
+        if: always()
+        shell: bash
+        run: rm -rf -- .scratch/android-signing
+      - name: Upload verified APK and emulator proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cpp-android-apk
+          path: .scratch/android-artifacts/
+          if-no-files-found: error
+          retention-days: 3

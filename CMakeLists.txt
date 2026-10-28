@@ -61,9 +61,67 @@ if(ANDROID)
     if(Qt6_VERSION VERSION_LESS 6.8)
         message(FATAL_ERROR "Android packaging requires Qt 6.8 or later")
     endif()
+    set(PULS_ANDROID_VERSION_CODE "4000" CACHE STRING "Monotonic Android version code")
+    if(NOT PULS_ANDROID_VERSION_CODE MATCHES "^[1-9][0-9]*$" OR
+       PULS_ANDROID_VERSION_CODE GREATER 2100000000)
+        message(FATAL_ERROR "PULS_ANDROID_VERSION_CODE must be an integer from 1 to 2100000000")
+    endif()
+    if(NOT PULS_VERSION_LABEL MATCHES "^[0-9A-Za-z.+_-]+$")
+        message(FATAL_ERROR "Android PULS_VERSION_LABEL must be a version string")
+    endif()
+    set(PULS_ANDROID_OPENSSL_ROOT "" CACHE PATH "OpenSSL 3 runtime directory containing one subdirectory per Android ABI")
+    if(NOT IS_DIRECTORY "${PULS_ANDROID_OPENSSL_ROOT}")
+        message(FATAL_ERROR "Android requires PULS_ANDROID_OPENSSL_ROOT with packaged OpenSSL 3 libraries")
+    endif()
+    set(puls_android_abis "${CMAKE_ANDROID_ARCH_ABI}" ${QT_ANDROID_ABIS})
+    list(REMOVE_DUPLICATES puls_android_abis)
+    set(puls_android_ssl_libraries "")
+    foreach(abi IN LISTS puls_android_abis)
+        foreach(library IN ITEMS crypto ssl)
+            set(path "${PULS_ANDROID_OPENSSL_ROOT}/${abi}/lib${library}_3.so")
+            if(NOT EXISTS "${path}")
+                message(FATAL_ERROR "Missing Android TLS runtime: ${path}")
+            endif()
+            list(APPEND puls_android_ssl_libraries "${path}")
+        endforeach()
+    endforeach()
+    if(NOT EXISTS "${PULS_ANDROID_OPENSSL_ROOT}/LICENSE.txt")
+        message(FATAL_ERROR "Android OpenSSL runtime must include LICENSE.txt")
+    endif()
+    # The additional ABI projects do not inherit arbitrary cache variables.
+    list(APPEND QT_ANDROID_MULTI_ABI_FORWARD_VARS PULS_ANDROID_OPENSSL_ROOT
+        PULS_ANDROID_VERSION_CODE PULS_VERSION_LABEL PULS_BUILD_GUI PULS_DEPLOY_RUNTIME
+        BUILD_TESTING)
+    list(REMOVE_DUPLICATES QT_ANDROID_MULTI_ABI_FORWARD_VARS)
+    set(puls_android_package "${PROJECT_BINARY_DIR}/puls-android-package")
+    file(MAKE_DIRECTORY "${puls_android_package}/res/drawable"
+        "${puls_android_package}/res/raw")
+    configure_file(cpp/android/AndroidManifest.xml.in
+        "${puls_android_package}/AndroidManifest.xml" @ONLY)
+    configure_file(internal/gui/assets/Icon.png
+        "${puls_android_package}/res/drawable/puls_icon.png" COPYONLY)
+    configure_file("${PULS_ANDROID_OPENSSL_ROOT}/LICENSE.txt"
+        "${puls_android_package}/res/raw/openssl_license.txt" COPYONLY)
+    configure_file(LICENSE "${puls_android_package}/res/raw/puls_license.txt" COPYONLY)
+    file(GLOB puls_android_qt_notices CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/cmake/qt-licenses/*.txt")
+    foreach(notice IN LISTS puls_android_qt_notices)
+        get_filename_component(name "${notice}" NAME_WLE)
+        string(TOLOWER "${name}" name)
+        string(REGEX REPLACE "[^a-z0-9_]" "_" name "${name}")
+        configure_file("${notice}" "${puls_android_package}/res/raw/qt_${name}.txt" COPYONLY)
+    endforeach()
     set_target_properties(puls PROPERTIES
         QT_ANDROID_PACKAGE_NAME "io.github.cheviiot.puls"
-        QT_ANDROID_VERSION_NAME "${PROJECT_VERSION}-cpp-dev")
+        QT_ANDROID_APP_NAME "Puls"
+        QT_ANDROID_PACKAGE_SOURCE_DIR "${puls_android_package}"
+        QT_ANDROID_VERSION_NAME "${PULS_VERSION_LABEL}"
+        QT_ANDROID_VERSION_CODE "${PULS_ANDROID_VERSION_CODE}"
+        QT_ANDROID_MIN_SDK_VERSION 28
+        QT_ANDROID_TARGET_SDK_VERSION 35
+        QT_ANDROID_SDK_BUILD_TOOLS_REVISION "35.0.0"
+        QT_ANDROID_EXTRA_LIBS "${puls_android_ssl_libraries}")
+    target_link_options(puls PRIVATE "-Wl,-z,max-page-size=16384")
 endif()
 
 set(PULS_TARGETS puls_core puls_cli puls)
