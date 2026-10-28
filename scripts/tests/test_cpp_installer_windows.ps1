@@ -13,6 +13,8 @@ $testHome = Join-Path $scratch "home"
 $installDir = Join-Path $scratch "custom install"
 $originalUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $serverJob = $null
+$primaryError = $null
+$cleanupErrors = @()
 
 function Get-FileHash256([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
@@ -40,8 +42,9 @@ function New-TestRelease([string]$Version, [string]$Label, [switch]$IncludeTrave
     # backslash-separated entry names, which the installer correctly rejects.
     [void][Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem")
     $archiveStream = [IO.File]::Open($archivePath, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-    $archive = [IO.Compression.ZipArchive]::new($archiveStream, [IO.Compression.ZipArchiveMode]::Create, $true)
+    $archive = $null
     try {
+        $archive = [IO.Compression.ZipArchive]::new($archiveStream, [IO.Compression.ZipArchiveMode]::Create, $true)
         $null = $archive.CreateEntry("$packageName/")
         foreach ($file in Get-ChildItem -LiteralPath $packageRoot -File -Recurse) {
             $relativePath = $file.FullName.Substring($packageRoot.Length).TrimStart([char[]]@([char]'\', [char]'/')).Replace('\', '/')
@@ -64,8 +67,8 @@ function New-TestRelease([string]$Version, [string]$Label, [switch]$IncludeTrave
             } finally { $entryStream.Dispose() }
         }
     } finally {
-        $archive.Dispose()
-        $archiveStream.Dispose()
+        try { if ($null -ne $archive) { $archive.Dispose() } }
+        finally { $archiveStream.Dispose() }
     }
     $assetHash = Get-FileHash256 $archivePath
     $manifest = @{
@@ -125,6 +128,8 @@ try {
             while (-not (Test-Path -LiteralPath $StopFile)) {
                 if (-not $listener.Pending()) { Start-Sleep -Milliseconds 25; continue }
                 $client = $listener.AcceptTcpClient()
+                $stream = $null
+                $reader = $null
                 try {
                     $stream = $client.GetStream(); $reader = [IO.StreamReader]::new($stream)
                     $requestLine = $reader.ReadLine(); while ($reader.ReadLine() -ne "") { }
@@ -140,7 +145,13 @@ try {
                     }
                     $header = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 $status`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")
                     $stream.Write($header, 0, $header.Length); $stream.Write($body, 0, $body.Length); $stream.Flush()
-                } finally { $client.Dispose() }
+                } finally {
+                    try { if ($null -ne $reader) { $reader.Dispose() } }
+                    finally {
+                        try { if ($null -ne $stream) { $stream.Dispose() } }
+                        finally { $client.Dispose() }
+                    }
+                }
             }
         } finally { $listener.Stop() }
     }
@@ -190,12 +201,45 @@ try {
     if (Test-Path -LiteralPath (Join-Path $installDir "puls.cmd")) { throw "Uninstall left the managed shim." }
     if ((Get-Content -Raw -LiteralPath (Join-Path $installDir "keep.txt")) -ne "user data") { throw "Uninstall removed unrelated user data." }
     Write-Output "C++ Windows installer integration checks passed."
+} catch {
+    $primaryError = $_
 } finally {
-    [Environment]::SetEnvironmentVariable("Path", $originalUserPath, "User")
+    try { [Environment]::SetEnvironmentVariable("Path", $originalUserPath, "User") }
+    catch { $cleanupErrors += "restore user PATH: $($_.Exception.Message)" }
     if ($null -ne $serverJob) {
-        [IO.File]::WriteAllText($stopFile, "stop", [Text.Encoding]::ASCII)
-        Stop-Job -Job $serverJob -ErrorAction SilentlyContinue
-        Remove-Job -Job $serverJob -Force -ErrorAction SilentlyContinue
+        try { [IO.File]::WriteAllText($stopFile, "stop", [Text.Encoding]::ASCII) }
+        catch { $cleanupErrors += "signal HTTP server: $($_.Exception.Message)" }
+        try {
+            $null = Wait-Job -Job $serverJob -Timeout 10
+            if ($serverJob.State -notin @("Completed", "Failed", "Stopped")) {
+                Stop-Job -Job $serverJob -ErrorAction Stop
+                $null = Wait-Job -Job $serverJob -Timeout 5
+            }
+            if ($serverJob.State -notin @("Completed", "Failed", "Stopped")) {
+                throw "HTTP fixture server job did not stop."
+            }
+        } catch { $cleanupErrors += "stop HTTP server: $($_.Exception.Message)" }
+        try { Remove-Job -Job $serverJob -Force -ErrorAction Stop }
+        catch { $cleanupErrors += "remove HTTP server job: $($_.Exception.Message)" }
     }
-    if (Test-Path -LiteralPath $scratch) { Remove-Item -Recurse -Force -LiteralPath $scratch }
+    try {
+        if (Test-Path -LiteralPath $scratch) {
+            $removed = $false
+            for ($attempt = 0; $attempt -lt 4 -and -not $removed; $attempt++) {
+                try {
+                    Remove-Item -Recurse -Force -LiteralPath $scratch -ErrorAction Stop
+                    $removed = $true
+                } catch {
+                    if ($attempt -eq 3) { $cleanupErrors += "remove test scratch: $($_.Exception.Message)" }
+                    else { Start-Sleep -Milliseconds 250 }
+                }
+            }
+        }
+    } catch { $cleanupErrors += "remove test scratch: $($_.Exception.Message)" }
+    if ($null -ne $primaryError -and $cleanupErrors.Count -gt 0) {
+        try { Write-Warning ("Cleanup also reported errors: " + ($cleanupErrors -join "; ")) }
+        catch { }
+    }
 }
+if ($null -ne $primaryError) { throw $primaryError }
+if ($cleanupErrors.Count -gt 0) { throw ("Windows installer test cleanup failed: " + ($cleanupErrors -join "; ")) }
