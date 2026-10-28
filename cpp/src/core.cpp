@@ -14,7 +14,16 @@ OpError::OpError(QString codeValue, QString phaseValue, QString text, bool canRe
       retryable(canRetry && code != "canceled") {}
 
 QJsonObject OpError::json() const {
-    return {{"code", code}, {"phase", phase}, {"message", message}, {"retryable", retryable}};
+    // Keep public schema-1 messages aligned with application.HumanError in the
+    // reference implementation. Protocol details remain in the typed cause.
+    QString human = message;
+    if (code == "canceled") human = QStringLiteral("операция отменена");
+    else if (code == "timeout") human = QStringLiteral("истекло время ожидания");
+    else if (code == "protocol") human = QStringLiteral("ответ сервиса не соответствует протоколу");
+    else if (code == "auth") human = QStringLiteral("сервис отклонил авторизацию");
+    else if (code == "unavailable") human = QStringLiteral("сервис временно недоступен");
+    else if (code == "internal") human = QStringLiteral("внутренняя ошибка");
+    return {{"code", code}, {"phase", phase}, {"message", human}, {"retryable", retryable}};
 }
 
 void checkCanceled(const Cancellation& cancellation, const QString& phase) {

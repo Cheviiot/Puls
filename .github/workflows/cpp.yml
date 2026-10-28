@@ -3,9 +3,9 @@ name: C++ migration
 on:
   push:
     branches: [main, 'codex/cpp-*']
-    paths: ['cpp/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png']
+    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png', 'scripts/release_cpp.py', 'scripts/tests/**']
   pull_request:
-    paths: ['cpp/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png']
+    paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp.yml', 'internal/gui/assets/Icon.png', 'scripts/release_cpp.py', 'scripts/tests/**']
   workflow_dispatch:
 
 permissions:
@@ -49,6 +49,11 @@ jobs:
           cppcheck --enable=warning,performance,portability --error-exitcode=1
           --std=c++20 --library=qt --suppress=missingIncludeSystem --inline-suppr
           -Icpp/include cpp/src cpp/tests
+      - name: Test release tooling
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s scripts/tests -v
 
   sanitizers:
     runs-on: ubuntu-24.04

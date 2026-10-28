@@ -2,6 +2,8 @@
 /.scratch/
 /build/
 /build-*/
+/scripts/__pycache__/
+/scripts/tests/__pycache__/
 /puls
 /puls.exe
 *.apk

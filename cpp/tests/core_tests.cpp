@@ -3,6 +3,9 @@
 
 #include <QCoreApplication>
 #include <QEventLoop>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonValue>
@@ -48,6 +51,23 @@ void expectThrows(Fn&& fn, const char* label) {
         fn();
         expect(false, label);
     } catch (const std::exception&) {
+    }
+}
+
+void testPublicErrorMessagesMatchSchemaOne() {
+    QFile golden(QFileInfo(QString::fromUtf8(__FILE__)).dir().filePath("golden/errors.json"));
+    expect(golden.open(QIODevice::ReadOnly), "error message golden file opens");
+    const auto values = QJsonDocument::fromJson(golden.readAll()).array();
+    expect(values.size() == 6, "all stable error codes have golden messages");
+    for (const auto& item : values) {
+        const auto expected = item.toObject();
+        const QString code = expected.value("code").toString();
+        const puls::OpError error(code, "download", "internal protocol cause", true);
+        const auto value = error.json();
+        expect(value.value("message") == expected.value("message"), "public error message matches Go schema-one contract");
+        expect(value.value("code") == code && value.value("phase") == "download" && value.size() == 4,
+               "public error JSON contains only stable fields");
+        expect(error.message == "internal protocol cause", "typed cause retains internal diagnostics");
     }
 }
 
@@ -1060,6 +1080,7 @@ void testMeasurementExitCodes() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    testPublicErrorMessagesMatchSchemaOne();
     testParseMeasurementCommands();
     testBooleanFlagSyntax();
     testInvalidCLIArguments();

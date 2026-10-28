@@ -1,0 +1,8 @@
+[
+  {"code":"canceled","message":"операция отменена"},
+  {"code":"timeout","message":"истекло время ожидания"},
+  {"code":"protocol","message":"ответ сервиса не соответствует протоколу"},
+  {"code":"auth","message":"сервис отклонил авторизацию"},
+  {"code":"unavailable","message":"сервис временно недоступен"},
+  {"code":"internal","message":"внутренняя ошибка"}
+]

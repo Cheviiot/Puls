@@ -5,6 +5,8 @@
 
 #include <QCoreApplication>
 #include <QJsonDocument>
+#include <QLibraryInfo>
+#include <QSslSocket>
 #include <QThread>
 #include <atomic>
 #include <chrono>
@@ -120,6 +122,16 @@ QString phaseName(const QString& phase) {
     if (phase == "upload") return QStringLiteral("отдача");
     return phase;
 }
+
+int runtimeProbe(int& argc, char** argv) {
+    QCoreApplication application(argc, argv);
+    const bool ssl = QSslSocket::supportsSsl();
+    const QJsonObject result{{"qt_version", QString::fromLatin1(qVersion())},
+                             {"ssl_available", ssl}, {"ssl_backend", QSslSocket::activeBackend()},
+                             {"plugin_paths", QJsonArray::fromStringList(QCoreApplication::libraryPaths())},
+                             {"qt_prefix", QLibraryInfo::path(QLibraryInfo::PrefixPath)}};
+    return writeOutput(stdout, QJsonDocument(result).toJson(QJsonDocument::Compact) + '\n') && ssl ? 0 : 1;
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -131,6 +143,10 @@ int main(int argc, char** argv) {
 #endif
     QStringList arguments;
     for (int index = 1; index < argc; ++index) arguments.append(QString::fromLocal8Bit(argv[index]));
+    // Private deployment check: never adds a public command or changes normal
+    // version output. It exercises TLS plugin loading from a relocated package.
+    if (qEnvironmentVariable("PULS_RUNTIME_PROBE") == "1" && arguments == QStringList{"version"})
+        return runtimeProbe(argc, argv);
     puls::Config config;
 #ifndef Q_OS_ANDROID
     try {

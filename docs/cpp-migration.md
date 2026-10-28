@@ -57,6 +57,13 @@ connection timeout 15000 мс, binary frame 64 KiB и предел очеред�
 1 MiB. Общий startup deadline engine дополнительно ограничивает ожидание.
 Production-ответы и credentials не сохранялись.
 
+Нативные CI Windows, Linux и macOS проверяют девять групп CTest с повтором ×10;
+отдельно запускаются ASan/UBSan и cppcheck. Локально проверен TSan общего engine.
+Короткий live-прогон обоих сервисов (`all --duration 3 --connections 1`) прошёл
+все фазы при явно включённом `PULS_LIVE_THROUGHPUT=1`. Прерывание живой отдачи
+Ctrl+C вернуло JSON `canceled` и code 130 примерно за 136 мс. Это проверки
+работоспособности протокола; сравнение точности с браузером проводится отдельно.
+
 ## Сборка
 
 На ALT зависимости находятся в Distrobox. Для первого этапа используется

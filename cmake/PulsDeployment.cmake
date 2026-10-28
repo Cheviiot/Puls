@@ -94,6 +94,10 @@ endif()
 install(FILES "${PROJECT_SOURCE_DIR}/README.md" "${PROJECT_SOURCE_DIR}/CHANGELOG.md"
     DESTINATION "${puls_doc_dir}")
 install(FILES "${PROJECT_SOURCE_DIR}/LICENSE" DESTINATION "${puls_license_dir}")
+install(FILES "${PROJECT_SOURCE_DIR}/internal/gui/assets/Icon.png"
+    "${PROJECT_SOURCE_DIR}/internal/gui/assets/Icon.svg"
+    "${PROJECT_SOURCE_DIR}/internal/gui/assets/Icon.ico"
+    DESTINATION assets)
 install(DIRECTORY "${PROJECT_SOURCE_DIR}/cmake/qt-licenses/"
     DESTINATION "${puls_license_dir}/Qt")
 
