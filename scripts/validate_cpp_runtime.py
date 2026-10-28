@@ -391,9 +391,9 @@ def _check_preview(binary: Path, env: dict[str, str], scratch: Path) -> int:
     previews = scratch / "previews"
     previews.mkdir(parents=True, exist_ok=False)
     gui_env = dict(env)
-    # macdeployqt deliberately deploys the native Cocoa platform. Hosted macOS
-    # runners have WindowServer; exercise that packaged native GUI directly.
-    gui_env["QT_QPA_PLATFORM"] = "cocoa" if sys.platform == "darwin" else "offscreen"
+    # The deployment includes this plugin on every desktop platform, so the
+    # 1280x800 matrix does not depend on the CI monitor's physical resolution.
+    gui_env["QT_QPA_PLATFORM"] = "offscreen"
     gui_env["PULS_GUI_PREVIEW_DIR"] = str(previews)
     result = _run([str(binary), "gui"], gui_env, timeout=120)
     if result.returncode != 0:

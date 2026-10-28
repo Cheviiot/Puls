@@ -201,7 +201,7 @@ class RuntimeValidatorTests(unittest.TestCase):
         invalid = False
 
         def render(command, env, timeout):
-            self.assertEqual(env["QT_QPA_PLATFORM"], "cocoa")
+            self.assertEqual(env["QT_QPA_PLATFORM"], "offscreen")
             directory = Path(env["PULS_GUI_PREVIEW_DIR"])
             for index in range(42):
                 width, height = sizes[index % len(sizes)]
@@ -210,7 +210,7 @@ class RuntimeValidatorTests(unittest.TestCase):
                 (directory / f"light-{index}-{width}x{height}.png").write_bytes(header)
             return subprocess.CompletedProcess(command, 0, "", "")
 
-        with mock.patch.object(runtime.sys, "platform", "darwin"), mock.patch.object(runtime, "_run", side_effect=render):
+        with mock.patch.object(runtime, "_run", side_effect=render):
             self.assertEqual(runtime._check_preview(self.root / "puls", {}, self.root / "retina"), 42)
             invalid = True
             with self.assertRaisesRegex(runtime.ValidationError, "pixel size"):

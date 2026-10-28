@@ -33,7 +33,9 @@ permissions:
 
 concurrency:
   group: cpp-release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve a cold source-SDK build across application-only updates. The SDK
+  # is cached before packaging, and GitHub keeps only the latest pending run.
+  cancel-in-progress: false
 
 jobs:
   package:

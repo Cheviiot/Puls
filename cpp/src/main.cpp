@@ -113,7 +113,7 @@ int terminalWidth(FILE* stream) {
     return 80;
 }
 
-QString safeTerminalText(QString value) {
+QString safeTerminalText(const QString& value) {
     QString clean;
     clean.reserve(qMin(value.size(), 320));
     for (const QChar ch : value) {
@@ -176,9 +176,12 @@ private:
 
 class ConsoleColorMode {
 public:
-    explicit ConsoleColorMode(bool requested) {
+    explicit ConsoleColorMode(bool requested)
 #ifdef Q_OS_WIN
-        handle_ = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stdout)));
+        : handle_(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stdout))))
+#endif
+    {
+#ifdef Q_OS_WIN
         if (!requested || handle_ == INVALID_HANDLE_VALUE || !GetConsoleMode(handle_, &original_)) return;
         enabled_ = SetConsoleMode(handle_, original_ | ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0;
 #else

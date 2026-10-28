@@ -53,6 +53,19 @@ endif()
 # native deployment must fail rather than create an incomplete release archive.
 install(CODE "set(QT_DEPLOY_PLUGINS_DIR \"${PULS_RUNTIME_PLUGINS_DIR}\")")
 set(puls_deploy_options "")
+if(APPLE AND PULS_BUILD_GUI)
+    # Native Cocoa constrains windows to the runner's available screen (often
+    # only 1280x720). Ship the SDK's offscreen plugin for the full size matrix.
+    # macdeployqt ignores it by default; -executable includes its dependencies,
+    # rewrites SDK framework paths, and includes it in bundle code signing.
+    if(NOT TARGET Qt6::QOffscreenIntegrationPlugin)
+        message(FATAL_ERROR "The macOS release SDK must include the offscreen QPA plugin")
+    endif()
+    install(FILES "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>"
+        DESTINATION "puls.app/Contents/PlugIns/platforms")
+    list(APPEND puls_deploy_options DEPLOY_TOOL_OPTIONS
+        "-executable=puls.app/Contents/PlugIns/platforms/libqoffscreen.dylib")
+endif()
 if(UNIX AND NOT APPLE)
     # The runtime relies on the target distribution's libc/ELF loader and trust
     # store. Never redistribute a different glibc next to the application.
