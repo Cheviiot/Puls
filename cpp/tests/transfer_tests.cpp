@@ -42,16 +42,22 @@ void waitStopped(const puls::transfer::WorkerContext& context) {
 }
 
 void testReadinessWarmupAndDeadlineAccounting() {
-    auto runConfig = config(70ms);
+    // Leave enough measurement time for the worker to observe the coordinator
+    // callback even on Windows runners with a delayed thread wake-up.
+    auto runConfig = config(300ms);
     runConfig.warmup = 25ms;
     std::atomic_bool measuring{false};
+    std::atomic_bool recordedMeasurement{false};
     std::atomic_bool exited{false};
     const auto result = puls::transfer::run(runConfig, {}, [&](int, int, const auto& context) {
         context.record(9000); // A protocol callback before ready must be ignored.
         context.ready();
         context.record(1000); // Warmup bytes must not enter the measured result.
-        while (!context.stopped() && !measuring.load()) std::this_thread::sleep_for(1ms);
-        if (measuring.load()) context.record(321);
+        while (!context.stopped()) {
+            if (measuring.load() && !recordedMeasurement.exchange(true))
+                context.record(321);
+            std::this_thread::sleep_for(1ms);
+        }
         waitStopped(context);
         context.record(777); // The immutable deadline rejects late bytes.
         exited.store(true);
