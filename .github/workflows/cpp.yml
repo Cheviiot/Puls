@@ -26,7 +26,51 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Python for Qt Windows metadata compatibility
+        if: matrix.os == 'windows-2022'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Restore Qt 6.12 Windows amd64 SDK
+        id: qt-windows-cache
+        if: matrix.os == 'windows-2022'
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}\puls-qt-6.12.0-windows-amd64
+          key: puls-qt-6.12.0-windows-amd64-aqt3.3.0-msvc2022-v1
+      - name: Install Qt 6.12 Windows amd64 with guarded Qt metadata compatibility
+        if: matrix.os == 'windows-2022' && steps.qt-windows-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $venv = Join-Path $env:RUNNER_TEMP 'aqtinstall-3.3.0'
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = Join-Path $venv 'Scripts/python.exe'
+          & $python -m pip install --disable-pip-version-check 'setuptools>=70.1.0' 'py7zr==1.1.0'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m pip install --disable-pip-version-check 'aqtinstall==3.3.0'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $qtOutput = Join-Path $env:RUNNER_TEMP 'puls-qt-6.12.0-windows-amd64'
+          & $python "$env:GITHUB_WORKSPACE/scripts/install_qt_windows_x64.py" --outputdir $qtOutput --dry-run
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python "$env:GITHUB_WORKSPACE/scripts/install_qt_windows_x64.py" --outputdir $qtOutput
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Save Qt 6.12 Windows amd64 SDK cache
+        if: matrix.os == 'windows-2022' && steps.qt-windows-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}\puls-qt-6.12.0-windows-amd64
+          key: puls-qt-6.12.0-windows-amd64-aqt3.3.0-msvc2022-v1
+      - name: Set Qt 6.12 Windows amd64 SDK path
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $qtRoot = Join-Path $env:RUNNER_TEMP 'puls-qt-6.12.0-windows-amd64/6.12.0/msvc2022_64'
+          "QT_ROOT_DIR=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_PREFIX_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          (Join-Path $qtRoot 'bin') | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Install Qt
+        if: matrix.os != 'windows-2022'
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
           version: '6.12.0'
