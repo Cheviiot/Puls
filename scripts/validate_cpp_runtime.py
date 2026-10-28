@@ -325,10 +325,11 @@ def _check_linux(stage: Path, binary: Path, gui: bool, env: dict[str, str]) -> d
     _require_tools("ldd")
     for item in stage.rglob("*"):
         name = item.name.lower()
-        if (name.startswith(("libgtk", "libgdk", "ld-linux", "ld64.so", "libnss_")) or
+        if (name.startswith(("libgtk", "libgdk", "ld-linux", "ld64.so", "libnss_",
+                             "libfontconfig.so", "libfreetype.so")) or
                 name in ("libc.so.6", "libm.so.6", "libpthread.so.0", "libdl.so.2", "librt.so.1",
                          "libresolv.so.2", "libutil.so.1", "libanl.so.1")):
-            raise ValidationError("stage bundles a system GTK, glibc, or loader library")
+            raise ValidationError("stage bundles a system GTK, glibc, font-stack, or loader library")
     result = _run(["ldd", str(binary)], env)
     if result.returncode != 0:
         raise ValidationError("ldd could not inspect the staged executable")

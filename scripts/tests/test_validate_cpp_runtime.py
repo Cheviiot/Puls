@@ -196,6 +196,21 @@ class RuntimeValidatorTests(unittest.TestCase):
             with self.assertRaises(runtime.ValidationError):
                 runtime._check_linux(stage, stage / "bin" / "puls", False, {})
 
+    def test_linux_runtime_rejects_bundled_host_font_stack(self):
+        stage = self.root / "stage"
+        library_dir = stage / "lib"
+        library_dir.mkdir(parents=True)
+        for name in ("libfontconfig.so.1", "libfontconfig.so.1.12.0",
+                     "libfreetype.so.6", "libfreetype.so.6.18.1"):
+            with self.subTest(library=name):
+                library = library_dir / name
+                library.write_bytes(b"old distribution font runtime")
+                with mock.patch.object(runtime, "_require_tools"), mock.patch.object(runtime, "_run") as run:
+                    with self.assertRaisesRegex(runtime.ValidationError, "font-stack"):
+                        runtime._check_linux(stage, stage / "bin" / "puls", True, {})
+                    run.assert_not_called()
+                library.unlink()
+
     def test_retina_preview_preserves_logical_size_and_rejects_wrong_aspect_ratio(self):
         sizes = ((360, 294), (360, 640), (900, 600), (1280, 800))
         invalid = False

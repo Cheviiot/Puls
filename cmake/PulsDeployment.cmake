@@ -72,6 +72,9 @@ if(UNIX AND NOT APPLE)
     set(puls_system_library_patterns "ld-linux" "ld64[.]so" "libc[.]so" "libm[.]so"
         "libpthread[.]so" "librt[.]so" "libdl[.]so" "libresolv[.]so" "libutil[.]so"
         "libnss_" "libGL" "libEGL" "libOpenGL" "libvulkan" "libdrm" "libgbm"
+        # These libraries interpret the host's font configuration and font files.
+        # An older bundled fontconfig cannot parse newer distribution XML rules.
+        "libfontconfig[.]so" "libfreetype[.]so"
         "libgtk-" "libgdk-3[.]so")
     set(puls_pre_exclude "")
     set(puls_post_exclude "")
