@@ -3,6 +3,8 @@
 #include <QUrl>
 #include <QString>
 #include <memory>
+#include <chrono>
+#include <optional>
 
 namespace puls {
 
@@ -15,6 +17,11 @@ struct BackendOptions {
     QUrl yandexBase = QUrl(QStringLiteral("https://yandex.ru"));
     QUrl speedtestBase = QUrl(QStringLiteral("https://speedtest.ru"));
     bool allowLoopbackHTTP = false;
+    // Test-only timing injection; never exposed as a CLI flag or environment.
+    std::optional<std::chrono::milliseconds> transferDuration;
+    std::optional<std::chrono::milliseconds> transferWarmup;
+    std::optional<std::chrono::milliseconds> transferReadyGrace;
+    std::optional<std::chrono::milliseconds> transferStartupTimeout;
 };
 
 std::unique_ptr<Backend> makeBackendForTesting(const QString& service,
