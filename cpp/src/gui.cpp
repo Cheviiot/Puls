@@ -35,7 +35,6 @@
 #include <QVBoxLayout>
 #ifdef Q_OS_ANDROID
 #include <QCoreApplication>
-#include <QDebug>
 #include <QJniObject>
 #include <QJsonDocument>
 #include <QSslSocket>
@@ -47,12 +46,25 @@
 namespace puls {
 namespace {
 #ifdef Q_OS_ANDROID
-void reportAndroidRuntimeProbe() {
-    if (!QNativeInterface::QAndroidApplication::isActivityContext()) return;
+void reportAndroidRuntimeProbe(int attemptsLeft = 50) {
+    const auto retry = [attemptsLeft] {
+        if (attemptsLeft > 0)
+            QTimer::singleShot(100, qApp, [attemptsLeft] { reportAndroidRuntimeProbe(attemptsLeft - 1); });
+    };
+    if (!QNativeInterface::QAndroidApplication::isActivityContext()) {
+        retry();
+        return;
+    }
     const QJniObject activity = QNativeInterface::QAndroidApplication::context();
-    if (!activity.isValid()) return;
+    if (!activity.isValid()) {
+        retry();
+        return;
+    }
     const QJniObject intent = activity.callObjectMethod("getIntent", "()Landroid/content/Intent;");
-    if (!intent.isValid()) return;
+    if (!intent.isValid()) {
+        retry();
+        return;
+    }
     const QJniObject key = QJniObject::fromString(QStringLiteral("puls.runtime_probe"));
     if (intent.callMethod<jboolean>("getBooleanExtra", "(Ljava/lang/String;Z)Z",
                                    key.object<jstring>(), JNI_FALSE) != JNI_TRUE) return;
@@ -60,8 +72,11 @@ void reportAndroidRuntimeProbe() {
     const QJsonObject result{{"ssl_available", sslAvailable},
                              {"ssl_backend", QSslSocket::activeBackend()},
                              {"qt_version", QString::fromLatin1(qVersion())}};
-    qInfo().noquote().nospace() << "PULS_RUNTIME_PROBE "
-                              << QJsonDocument(result).toJson(QJsonDocument::Compact);
+    const QJniObject tag = QJniObject::fromString(QStringLiteral("PulsRuntimeProbe"));
+    const QJniObject message = QJniObject::fromString(QStringLiteral("PULS_RUNTIME_PROBE ")
+        + QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact)));
+    QJniObject::callStaticMethod<jint>("android/util/Log", "i", "(Ljava/lang/String;Ljava/lang/String;)I",
+                                      tag.object<jstring>(), message.object<jstring>());
 }
 #endif
 
@@ -947,9 +962,6 @@ QWidget* createMainWindow(const Config& initial, BackendFactory factory) {
 
 int runGUI(int& argc, char** argv, const Config& initial) {
     QApplication application(argc, argv);
-#ifdef Q_OS_ANDROID
-    reportAndroidRuntimeProbe();
-#endif
     QApplication::setApplicationName(QStringLiteral("Puls"));
     QApplication::setOrganizationName(QStringLiteral("Puls"));
     QApplication::setApplicationVersion(versionText().trimmed().section(' ', 1));
@@ -960,6 +972,9 @@ int runGUI(int& argc, char** argv, const Config& initial) {
     application.setFont(font);
     std::unique_ptr<QWidget> window(createMainWindow(initial));
     window->show();
+#ifdef Q_OS_ANDROID
+    QTimer::singleShot(0, &application, [] { reportAndroidRuntimeProbe(); });
+#endif
     const auto previewDirectory = qEnvironmentVariable("PULS_GUI_PREVIEW_DIR");
     if (!previewDirectory.isEmpty()) {
         QTimer::singleShot(0, window.get(), [&application, &window, previewDirectory] {

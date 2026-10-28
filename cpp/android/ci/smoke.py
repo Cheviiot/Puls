@@ -13,6 +13,7 @@ import time
 APP = "io.github.cheviiot.puls"
 ACTIVITY = APP + "/org.qtproject.qt.android.bindings.QtActivity"
 RUNTIME_MARKER = "PULS_RUNTIME_PROBE "
+RUNTIME_TAG = "PulsRuntimeProbe"
 
 
 def parse_runtime_probe(logcat: str) -> dict:
@@ -67,10 +68,13 @@ def smoke(serial: str, apk: Path, output: Path) -> None:
     # Read only this process. Discard all log text after extracting the three
     # capability fields; neither logs nor network data become CI artifacts.
     deadline = time.monotonic() + 10
-    log = adb("logcat", "--pid", pid, "-d", "-v", "raw")
+    def runtime_log() -> str:
+        return adb("logcat", "-b", "main", "--pid", pid, "-d", "-v", "raw", RUNTIME_TAG + ":I", "*:S")
+
+    log = runtime_log()
     while RUNTIME_MARKER not in log and time.monotonic() < deadline:
         time.sleep(1)
-        log = adb("logcat", "--pid", pid, "-d", "-v", "raw")
+        log = runtime_log()
     capabilities = parse_runtime_probe(log)
     del log
     crash = adb("logcat", "-b", "crash", "--pid", pid, "-d", "-v", "brief")

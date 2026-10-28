@@ -64,9 +64,13 @@ artifacts; this workflow does not publish a release.
 `major * 1000000 + minor * 1000 + patch`; `0.4.0-cpp-dev` uses `4000`.
 The emulator proof covers installation, foreground launch, TLS backend loading,
 a screenshot, and background/resume. CI starts the activity with the private
-boolean intent extra `puls.runtime_probe=true`. Only that opt-in prints one
+boolean intent extra `puls.runtime_probe=true`. After the window is shown,
+a queued callback waits up to five seconds for an Android activity context.
+Only that opt-in writes one
 `PULS_RUNTIME_PROBE` JSON record containing `ssl_available`, `ssl_backend`, and
-`qt_version`. The smoke test reads logcat only for the application PID,
+`qt_version` through [Android's Log.i](https://developer.android.com/reference/android/util/Log),
+independent of Qt logging filters. The smoke test reads only that tag from
+the main logcat buffer and only for the application PID,
 requires working OpenSSL support, and saves only these capability fields in
 `smoke.json`. Full logs are neither saved nor published. No public command or
 flag is added, and no probe runs during normal GUI launch.
