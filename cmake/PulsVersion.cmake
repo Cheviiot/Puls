@@ -1,0 +1,13 @@
+# Keep native file/bundle metadata synchronized with the public release label.
+if(NOT PULS_VERSION_LABEL MATCHES "^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)([-+][0-9A-Za-z.+_-]+)?$")
+    message(FATAL_ERROR "PULS_VERSION_LABEL must be a numeric major.minor.patch with an optional suffix")
+endif()
+set(PULS_PACKAGE_VERSION_MAJOR "${CMAKE_MATCH_1}")
+set(PULS_PACKAGE_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(PULS_PACKAGE_VERSION_PATCH "${CMAKE_MATCH_3}")
+set(PULS_PACKAGE_VERSION "${PULS_PACKAGE_VERSION_MAJOR}.${PULS_PACKAGE_VERSION_MINOR}.${PULS_PACKAGE_VERSION_PATCH}")
+foreach(component IN ITEMS MAJOR MINOR PATCH)
+    if(PULS_PACKAGE_VERSION_${component} GREATER 65535)
+        message(FATAL_ERROR "PULS_VERSION_LABEL components must fit native Windows version metadata")
+    endif()
+endforeach()

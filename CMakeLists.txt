@@ -5,6 +5,7 @@ option(PULS_BUILD_GUI "Build the Qt Widgets frontend" ON)
 option(PULS_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(PULS_DEPLOY_RUNTIME "Install a relocatable native desktop Qt runtime" OFF)
 set(PULS_VERSION_LABEL "${PROJECT_VERSION}-cpp-dev" CACHE STRING "Public CLI and artifact version label")
+include(cmake/PulsVersion.cmake)
 include(CTest)
 include(GNUInstallDirs)
 set(CMAKE_CXX_STANDARD 20)
@@ -51,8 +52,8 @@ if(PULS_BUILD_GUI)
     target_compile_definitions(puls PRIVATE PULS_BUILD_GUI=1)
     set_target_properties(puls PROPERTIES MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.cheviiot.puls"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
-        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PULS_PACKAGE_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PULS_PACKAGE_VERSION}")
 endif()
 if(ANDROID AND NOT PULS_BUILD_GUI)
     message(FATAL_ERROR "Android requires PULS_BUILD_GUI=ON")
