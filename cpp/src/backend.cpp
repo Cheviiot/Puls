@@ -553,51 +553,52 @@ public:
                 if (!parsed.isValid() || parsed.host().isEmpty() || parsed.port(-1) < 1 || parsed.port(-1) > 65535 || !parsed.userInfo().isEmpty())
                     fail(id(), QStringLiteral("select"), QStringLiteral("internal"), QStringLiteral("неверный адрес сервера"));
                 selected_ = QmsServer{host, host, {}, {}, 0, {}};
+                candidates_.clear();
                 throughput_ = true;
                 fallback_ = false;
                 return serverJson(selected_);
             }
             fallback_ = false;
             try {
-            const auto url = options_.speedtestBase.resolved(QUrl(QStringLiteral("/api/nearest_servers?t=") + QString::number(QDateTime::currentMSecsSinceEpoch())));
-            auto key = session_.browserKey;
-            auto request = requestFor(url);
-            request.setRawHeader("x-api-key", key.toUtf8());
-            auto response = perform(manager_, request, maxSpeedDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
-            if (response.status == 401 || response.status == 403) {
-                key = refreshKey(cancellation, QStringLiteral("select"));
-                request = requestFor(url);
+                const auto url = options_.speedtestBase.resolved(QUrl(QStringLiteral("/api/nearest_servers?t=") + QString::number(QDateTime::currentMSecsSinceEpoch())));
+                auto key = session_.browserKey;
+                auto request = requestFor(url);
                 request.setRawHeader("x-api-key", key.toUtf8());
-                response = perform(manager_, request, maxSpeedDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
-            }
-            ensureHttp(response, id(), QStringLiteral("select"), QStringLiteral("nearest_servers"), QStringLiteral("application/json"));
-            const auto doc = parseJson(response.body, id(), QStringLiteral("select"), QStringLiteral("nearest_servers"), maxSpeedDiscovery);
-            const auto root = doc.object();
-            if (root.value("algorithm").toString().trimmed().isEmpty() || !root.value("data").isArray())
-                fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("nearest_servers вернул неверную схему"), true);
-            QList<QmsServer> candidates; QSet<QString> seen;
-            for (const auto& entry : root.value("data").toArray()) {
-                if (!entry.isObject()) continue;
-                const auto row = entry.toObject();
-                const QUrl src(row.value("src").toString(), QUrl::StrictMode);
-                const int port = row.value("port").toInt();
-                const int serverId = row.value("id").toInt();
-                const QString name = row.value("name").toString().trimmed(), city = row.value("city").toString().trimmed(), source = row.value("source").toString().trimmed();
-                if (!src.isValid() || src.host().isEmpty() || !checkedSourceAllowed(src) || !src.userInfo().isEmpty() || !src.query().isEmpty() || !src.fragment().isEmpty() || (!src.path().isEmpty() && src.path() != QStringLiteral("/")) || serverId <= 0 || name.isEmpty() || city.isEmpty() || source.isEmpty() || port < 1 || port > 65535) continue;
-                const QString sourceHost = src.host();
-                const QString host = (sourceHost.contains(':') ? QStringLiteral("[%1]").arg(sourceHost) : sourceHost) + QStringLiteral(":%1").arg(port);
-                if (seen.contains(host)) continue;
-                seen.insert(host); candidates.append({host, name, city, row.value("region_name").toString(), 0, {}});
-            }
-            if (candidates.isEmpty()) fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("nearest_servers не вернул корректных адресов"), true);
-            if (candidates.size() > 8) candidates = candidates.mid(0, 8);
-            QList<QmsServer> responsive = probeCandidates(candidates, cancellation);
-            if (responsive.isEmpty()) fail(id(), QStringLiteral("select"), QStringLiteral("unavailable"), QStringLiteral("ни один найденный сервер QMS не завершил согласование WebSocket"), true);
-            std::stable_sort(responsive.begin(), responsive.end(), [](const auto& a, const auto& b) { return a.median < b.median; });
-            selected_ = responsive.first();
-            candidates_ = responsive.mid(0, static_cast<int>(std::min<qsizetype>(4, responsive.size())));
-            throughput_ = true;
-            return serverJson(selected_);
+                auto response = perform(manager_, request, maxSpeedDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
+                if (response.status == 401 || response.status == 403) {
+                    key = refreshKey(cancellation, QStringLiteral("select"));
+                    request = requestFor(url);
+                    request.setRawHeader("x-api-key", key.toUtf8());
+                    response = perform(manager_, request, maxSpeedDiscovery, remaining(15000), cancellation, QStringLiteral("select"));
+                }
+                ensureHttp(response, id(), QStringLiteral("select"), QStringLiteral("nearest_servers"), QStringLiteral("application/json"));
+                const auto doc = parseJson(response.body, id(), QStringLiteral("select"), QStringLiteral("nearest_servers"), maxSpeedDiscovery);
+                const auto root = doc.object();
+                if (root.value("algorithm").toString().trimmed().isEmpty() || !root.value("data").isArray())
+                    fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("nearest_servers вернул неверную схему"), true);
+                QList<QmsServer> candidates; QSet<QString> seen;
+                for (const auto& entry : root.value("data").toArray()) {
+                    if (!entry.isObject()) continue;
+                    const auto row = entry.toObject();
+                    const QUrl src(row.value("src").toString(), QUrl::StrictMode);
+                    const int port = row.value("port").toInt();
+                    const int serverId = row.value("id").toInt();
+                    const QString name = row.value("name").toString().trimmed(), city = row.value("city").toString().trimmed(), source = row.value("source").toString().trimmed();
+                    if (!src.isValid() || src.host().isEmpty() || !checkedSourceAllowed(src) || !src.userInfo().isEmpty() || !src.query().isEmpty() || !src.fragment().isEmpty() || (!src.path().isEmpty() && src.path() != QStringLiteral("/")) || serverId <= 0 || name.isEmpty() || city.isEmpty() || source.isEmpty() || port < 1 || port > 65535) continue;
+                    const QString sourceHost = src.host();
+                    const QString host = (sourceHost.contains(':') ? QStringLiteral("[%1]").arg(sourceHost) : sourceHost) + QStringLiteral(":%1").arg(port);
+                    if (seen.contains(host)) continue;
+                    seen.insert(host); candidates.append({host, name, city, row.value("region_name").toString(), 0, {}});
+                }
+                if (candidates.isEmpty()) fail(id(), QStringLiteral("select"), QStringLiteral("protocol"), QStringLiteral("nearest_servers не вернул корректных адресов"), true);
+                if (candidates.size() > 8) candidates = candidates.mid(0, 8);
+                QList<QmsServer> responsive = probeCandidates(candidates, cancellation);
+                if (responsive.isEmpty()) fail(id(), QStringLiteral("select"), QStringLiteral("unavailable"), QStringLiteral("ни один найденный сервер QMS не завершил согласование WebSocket"), true);
+                std::stable_sort(responsive.begin(), responsive.end(), [](const auto& a, const auto& b) { return a.median < b.median; });
+                selected_ = responsive.first();
+                candidates_ = responsive.mid(0, static_cast<int>(std::min<qsizetype>(4, responsive.size())));
+                throughput_ = true;
+                return serverJson(selected_);
             } catch (const OpError& error) {
                 if (error.code == QStringLiteral("canceled") || cancellation.canceled()) throw;
                 const QStringList fallbackHosts = options_.speedtestFallbackHosts.value_or(QStringList{
@@ -607,6 +608,9 @@ public:
                     QStringLiteral("ulan-ude.qms.ru:20000"), QStringLiteral("yakutsk.qms.ru:20000"),
                     QStringLiteral("magadan.qms.ru:20000")});
                 if (fallbackHosts.isEmpty()) throw;
+                // Discovery has its own API budget. Even when that budget is
+                // exhausted, the ping-only fallback gets its bounded 8 s pass.
+                phaseClock_.restart();
                 return selectFallback(fallbackHosts, cancellation, error.message);
             }
         } catch (const OpError&) { throw; }

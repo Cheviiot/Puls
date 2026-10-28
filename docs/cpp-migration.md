@@ -46,8 +46,9 @@ Go-код и существующие незакоммиченные измен�
 релизов необходимы проверки всех целевых платформ, оставшийся паритет поведения,
 выпуск и установщики. Не допускаются искусственные коэффициенты результатов.
 
-Встроенный резервный список speedtest.ru для ping ещё не перенесён; при отказе
-discovery пока возвращается ошибка. Для Яндекса 26.10.2026 проверены актуальные
+Встроенный резервный список speedtest.ru используется при отказе discovery
+только для ping; download/upload в этом режиме возвращают явную ошибку без
+запроса JWT. Для Яндекса 26.10.2026 проверены актуальные
 `get-probes` и [официальный frontend r21702543](https://yastatic.net/s3/internetometer/r21702543/desktop.bundle.ru.js):
 `websocketConnectionTimeout` — необязательное переопределение. При отсутствии
 этого поля discovery принимается без выдуманного timeout; явно заданное значение
@@ -77,7 +78,23 @@ podman exec --user 1000 --workdir "$PWD" aeonlc-build \
 `podman exec`. Для CLI-only используйте `-DPULS_BUILD_GUI=OFF`. Windows
 собирается MSVC с UTF-8, macOS — Clang. Android требует Qt Android kit,
 официальный SDK/NDK, Qt 6.8+ и соответствующий Qt toolchain; APK пока не
-публикуется. Для sanitizers в Fedora нужны `libasan` и `libubsan`.
+публикуется. Для sanitizers в Fedora нужны `libasan`, `libubsan` и `libtsan`.
+
+Дополнительные инструменты проверок устанавливаются в тот же контейнер:
+
+```sh
+podman exec --user 0 aeonlc-build sh -lc \
+  'ionice -c 3 nice -n 19 dnf install -y --setopt=max_parallel_downloads=2 libasan libubsan libtsan cppcheck'
+```
+
+Статический анализ выполняет `cppcheck` (в Fedora-контейнере устанавливается
+пакет `cppcheck`); та же проверка включена в Linux CI:
+
+```sh
+cppcheck --enable=warning,performance,portability --error-exitcode=1 \
+  --std=c++20 --library=qt --suppress=missingIncludeSystem --inline-suppr \
+  -Icpp/include cpp/src cpp/tests
+```
 
 ```sh
 build/cpp-debug/puls help

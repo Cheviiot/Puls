@@ -135,7 +135,9 @@ puls::BackendOptions options(const QUrl& base) {
     puls::BackendOptions value;
     value.yandexBase = base;
     value.allowLoopbackHTTP = true;
-    value.transferDuration = 70ms;
+    // Leave room for another confirmed 2 MiB HTTP block after readiness on
+    // Windows. The first acknowledged block may belong to the startup stage.
+    value.transferDuration = 500ms;
     value.transferWarmup = 0ms;
     value.transferReadyGrace = 0ms;
     value.transferStartupTimeout = 700ms;
