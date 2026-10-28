@@ -292,6 +292,54 @@ void testStopAndRestart() {
     settle();
 }
 
+void testHideCancelsActiveRun() {
+    clearPreferences();
+    const auto backend = state();
+    backend->block = true;
+    std::unique_ptr<QWidget> window(puls::createMainWindow(config(), factory(backend)));
+    window->show();
+    settle();
+    auto* start = control<QPushButton>(window.get(), "startButton");
+    start->click();
+    expect(until([&] { return backend->entered.load() == 1; }), "hide test has active backend");
+    QElapsedTimer elapsed;
+    elapsed.start();
+    window->hide();
+    expect(until([&] { return backend->destroyed.load() == 1 && start->isEnabled(); }, 1000),
+           "hiding the window cancels and joins the active worker");
+    expect(elapsed.elapsed() < 1000 && backend->canceled.load() == 1,
+           "hiding reaches the active backend cancellation token promptly");
+    expect(control<QLabel>(window.get(), "statusLabel")->text() == QStringLiteral("Проверка остановлена"),
+           "hide cancellation restores the stopped status");
+    window->close();
+    settle();
+}
+
+void testMinimizeCancelsWhenPlatformSimulatesIt() {
+    clearPreferences();
+    const auto backend = state();
+    backend->block = true;
+    std::unique_ptr<QWidget> window(puls::createMainWindow(config(), factory(backend)));
+    window->show();
+    settle();
+    auto* start = control<QPushButton>(window.get(), "startButton");
+    start->click();
+    expect(until([&] { return backend->entered.load() == 1; }), "minimize test has active backend");
+    QElapsedTimer elapsed;
+    elapsed.start();
+    window->showMinimized();
+    QApplication::processEvents();
+    if (window->isMinimized()) {
+        expect(until([&] { return backend->destroyed.load() == 1 && start->isEnabled(); }, 1000),
+               "minimizing the window cancels and joins the active worker");
+        expect(elapsed.elapsed() < 1000 && backend->canceled.load() == 1,
+               "minimizing reaches the active backend cancellation token promptly");
+    }
+    window->showNormal();
+    window->close();
+    settle();
+}
+
 void testCloseAndDestructionCancel() {
     clearPreferences();
     const auto backend = state();
@@ -481,6 +529,8 @@ int main(int argc, char** argv) {
         testSuccessAndAffinity();
         testThroughputProgressAndStop();
         testStopAndRestart();
+        testHideCancelsActiveRun();
+        testMinimizeCancelsWhenPlatformSimulatesIt();
         testCloseAndDestructionCancel();
         testPrivatePreferences();
         testServiceNavigationAndDiscoveryProgress();

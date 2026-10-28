@@ -6,12 +6,14 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDir>
+#include <QEvent>
 #include <QFontDatabase>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QGridLayout>
 #include <QHash>
+#include <QHideEvent>
 #include <QIcon>
 #include <QLabel>
 #include <QMainWindow>
@@ -197,6 +199,16 @@ public:
     }
 
 protected:
+    void hideEvent(QHideEvent* event) override {
+        cancel();
+        QMainWindow::hideEvent(event);
+    }
+
+    void changeEvent(QEvent* event) override {
+        QMainWindow::changeEvent(event);
+        if (event->type() == QEvent::WindowStateChange && isMinimized()) cancel();
+    }
+
     void closeEvent(QCloseEvent* event) override {
         if (thread_) {
             closePending_ = true;
