@@ -215,8 +215,10 @@ def sanitize_environment(source: dict[str, str], stage_bin: Path) -> dict[str, s
 
 def _run(command: list[str], env: dict[str, str], timeout: int = 15) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(command, env=env, text=True, stdout=subprocess.PIPE,
+        return subprocess.run(command, env=env, text=True, encoding="utf-8", stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=timeout, check=False)
+    except UnicodeError as exc:
+        raise ValidationError("runtime check output is not valid UTF-8") from exc
     except subprocess.TimeoutExpired as exc:
         raise ValidationError("staged application exceeded its runtime check timeout") from exc
     except OSError as exc:
@@ -388,11 +390,14 @@ def _check_preview(binary: Path, env: dict[str, str], scratch: Path) -> int:
     previews = scratch / "previews"
     previews.mkdir(parents=True, exist_ok=False)
     gui_env = dict(env)
-    gui_env["QT_QPA_PLATFORM"] = "offscreen"
+    # macdeployqt deliberately deploys the native Cocoa platform. Hosted macOS
+    # runners have WindowServer; exercise that packaged native GUI directly.
+    gui_env["QT_QPA_PLATFORM"] = "cocoa" if sys.platform == "darwin" else "offscreen"
     gui_env["PULS_GUI_PREVIEW_DIR"] = str(previews)
     result = _run([str(binary), "gui"], gui_env, timeout=45)
     if result.returncode != 0:
-        raise ValidationError("staged GUI preview command failed")
+        diagnostic = result.stderr.strip()[-1500:]
+        raise ValidationError(f"staged GUI preview command failed ({result.returncode}): {diagnostic}")
     files = sorted(previews.rglob("*.png"))
     if len(files) != 42:
         raise ValidationError("GUI preview did not generate the complete 42-image matrix")

@@ -40,7 +40,8 @@ if(APPLE AND PULS_BUILD_GUI)
 endif()
 if(UNIX AND NOT APPLE)
     find_program(PULS_PATCHELF_EXECUTABLE patchelf REQUIRED)
-    file(RELATIVE_PATH puls_library_path "/${CMAKE_INSTALL_BINDIR}" "/${CMAKE_INSTALL_LIBDIR}")
+    file(RELATIVE_PATH puls_library_path "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_BINDIR}"
+        "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}")
     set_target_properties(puls PROPERTIES
         INSTALL_RPATH "$ORIGIN/${puls_library_path}"
         INSTALL_RPATH_USE_LINK_PATH FALSE)
@@ -70,11 +71,13 @@ if(UNIX AND NOT APPLE)
     # merged-/usr distributions put Qt itself there. Explicit post exclusions
     # retain Qt and its runtime dependencies without bundling libc or drivers.
     list(APPEND puls_deploy_options POST_EXCLUDE_REGEXES ${puls_post_exclude})
-    if(PULS_BUILD_GUI AND NOT Qt6_VERSION VERSION_LESS 6.10)
-        # Qt 6.10+ narrows QPA selection to SDK defaults. Preserve native
-        # Wayland and the display-free preview/test platform too.
-        list(APPEND puls_deploy_options INCLUDE_PLUGINS qoffscreen qminimal qwayland
-            EXCLUDE_PLUGINS qgtk3)
+endif()
+if(PULS_BUILD_GUI AND NOT Qt6_VERSION VERSION_LESS 6.10 AND NOT APPLE)
+    # Qt 6.10+ narrows QPA selection to SDK defaults. Preserve the
+    # display-free preview platform in Linux and Windows packages.
+    list(APPEND puls_deploy_options INCLUDE_PLUGINS qoffscreen qminimal)
+    if(UNIX)
+        list(APPEND puls_deploy_options INCLUDE_PLUGINS qwayland EXCLUDE_PLUGINS qgtk3)
     endif()
 endif()
 qt_generate_deploy_app_script(
@@ -91,7 +94,8 @@ if(UNIX AND NOT APPLE)
 endif()
 
 if(NOT APPLE)
-    file(RELATIVE_PATH PULS_QT_PREFIX "/${CMAKE_INSTALL_BINDIR}" "/")
+    file(RELATIVE_PATH PULS_QT_PREFIX "${PROJECT_BINARY_DIR}/${CMAKE_INSTALL_BINDIR}"
+        "${PROJECT_BINARY_DIR}")
     string(REGEX REPLACE "/+$" "" PULS_QT_PREFIX "${PULS_QT_PREFIX}")
     if(PULS_QT_PREFIX STREQUAL "")
         set(PULS_QT_PREFIX ".")
