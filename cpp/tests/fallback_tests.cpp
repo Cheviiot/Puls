@@ -77,6 +77,7 @@ protected:
             QObject::connect(&server, &QWebSocketServer::newConnection, &server, [this, &server, delayMs] {
                 while (server.hasPendingConnections()) {
                     QWebSocket* socket = server.nextPendingConnection();
+                    socket->setParent(&server);
                     ++acceptedSockets_;
                     QObject::connect(socket, &QWebSocket::textMessageReceived, socket,
                         [this, socket, delayMs](const QString& message) {
