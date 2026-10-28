@@ -79,6 +79,7 @@ void testStartupTimeoutJoinsWorker() {
 
 void testAllWorkersFailEvenAfterBytes() {
     auto runConfig = config(400ms, 2);
+    runConfig.reconnects = 0;
     std::atomic_int ready{0};
     std::atomic_bool measuring{false};
     const auto result = puls::transfer::run(runConfig, {}, [&](int, int, const auto& context) {
@@ -97,6 +98,7 @@ void testAllWorkersFailEvenAfterBytes() {
 
 void testPartialWorkerSuccessAndAggregatedError() {
     auto runConfig = config(60ms, 2);
+    runConfig.reconnects = 0;
     std::atomic_bool measuring{false};
     const auto result = puls::transfer::run(runConfig, {}, [&](int index, int, const auto& context) {
         context.ready();
@@ -256,6 +258,27 @@ void testProgressRunsOnCoordinatorAndElapsedExcludesTeardown() {
            "worker teardown is excluded from measured elapsed time");
 }
 
+void testLateCoordinatorCannotAdmitAfterDeadlineBytes() {
+    auto runConfig = config(40ms);
+    runConfig.progressInterval = 5ms;
+    std::atomic_bool lateRecordAttempted{false};
+    const auto result = puls::transfer::run(runConfig, {}, [&](int, int, const auto& context) {
+        context.ready();
+        while (!context.stopped()) {
+            context.record(1);
+            std::this_thread::sleep_for(1ms);
+        }
+        context.record(1000000);
+        lateRecordAttempted.store(true);
+    }, [](const QJsonObject&) {
+        std::this_thread::sleep_for(90ms); // Delay the coordinator beyond the measurement deadline.
+    });
+    expect(!result.error && result.bytes > 0, "late coordinator still returns pre-deadline measurement");
+    expect(lateRecordAttempted.load(), "worker attempts a confirmed-byte record after deadline");
+    expect(result.bytes < 1000000, "post-deadline bytes are rejected while coordinator is blocked");
+    expect(result.elapsedSeconds < 0.1, "coordinator delay does not extend measured elapsed time");
+}
+
 void testCallbackExceptionsJoinWorkers() {
     auto runConfig = config(500ms);
     std::atomic_bool exited{false};
@@ -296,6 +319,7 @@ int main(int argc, char** argv) {
     testZeroBytesIsAnError();
     testCancellationAtStartupWarmupAndMeasurement();
     testProgressRunsOnCoordinatorAndElapsedExcludesTeardown();
+    testLateCoordinatorCannotAdmitAfterDeadlineBytes();
     testCallbackExceptionsJoinWorkers();
     if (failures) std::cerr << failures << " transfer test(s) failed\n";
     return failures == 0 ? 0 : 1;
