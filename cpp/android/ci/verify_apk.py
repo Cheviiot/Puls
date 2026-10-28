@@ -16,6 +16,29 @@ def run(*command: str) -> str:
     return subprocess.check_output(command, text=True)
 
 
+def verify_elf(source, name: str, machine: int) -> None:
+    header = source.read(64)
+    if len(header) < 64 or header[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", header, 18)[0] != machine:
+        raise ValueError(f"APK contains an invalid or wrong-architecture ELF: {name}")
+    program_offset = struct.unpack_from("<Q", header, 32)[0]
+    entry_size, entry_count = struct.unpack_from("<HH", header, 54)
+    if entry_size != 56 or not 1 <= entry_count <= 128 or not 64 <= program_offset <= 1024 * 1024:
+        raise ValueError(f"APK contains an invalid ELF program table: {name}")
+    source.seek(program_offset)
+    load_segments = 0
+    for _ in range(entry_count):
+        entry = source.read(entry_size)
+        if len(entry) != entry_size:
+            raise ValueError(f"APK contains a truncated ELF program table: {name}")
+        kind, _, offset, address, _, _, _, alignment = struct.unpack("<IIQQQQQQ", entry)
+        if kind == 1:  # PT_LOAD
+            load_segments += 1
+            if alignment < 16384 or alignment & (alignment - 1) or offset % 16384 != address % 16384:
+                raise ValueError(f"APK ELF does not support 16 KiB pages: {name}")
+    if not load_segments:
+        raise ValueError(f"APK ELF has no loadable segments: {name}")
+
+
 def verify(apk: Path, tools: Path, version: str, version_code: int) -> dict:
     run(str(tools / "apksigner"), "verify", "--verbose", str(apk))
     run(str(tools / "zipalign"), "-c", "-P", "16", "4", str(apk))
@@ -44,10 +67,10 @@ def verify(apk: Path, tools: Path, version: str, version_code: int) -> dict:
             for name in required:
                 if name not in names:
                     raise ValueError(f"APK is missing {name}")
+            native_libraries = sorted(name for name in names if name.startswith(f"lib/{abi}/") and name.endswith(".so"))
+            for name in native_libraries:
                 with archive.open(name) as source:
-                    header = source.read(64)
-                if len(header) < 64 or header[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", header, 18)[0] != machine:
-                    raise ValueError(f"APK contains an invalid or wrong-architecture ELF: {name}")
+                    verify_elf(source, name, machine)
             if not any(name.startswith(f"lib/{abi}/libplugins_tls_") and "openssl" in name for name in names):
                 raise ValueError(f"APK is missing the Qt OpenSSL TLS plugin for {abi}")
         for name in ("res/raw/openssl_license.txt", "res/raw/puls_license.txt", "res/raw/qt_lgpl_3_0_only.txt"):
@@ -59,6 +82,7 @@ def verify(apk: Path, tools: Path, version: str, version_code: int) -> dict:
             digest.update(chunk)
     return {"package": "io.github.cheviiot.puls", "version": version, "version_code": version_code,
             "abis": sorted(abis), "permissions": sorted(requested), "signature_verified": True,
+            "native_page_alignment": 16384,
             "sha256": digest.hexdigest()}
 
 

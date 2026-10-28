@@ -16,13 +16,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  QT_VERSION: '6.8.3'
+  QT_VERSION: '6.12.0'
   RELEASE_VERSION: '0.4.0-cpp-dev'
   # Keep the stable release formula: major * 1000000 + minor * 1000 + patch.
   # This exceeds the preceding 0.3.3 APK's version code (3003).
   ANDROID_VERSION_CODE: '4000'
-  NDK_VERSION: '26.1.10909125'
-  BUILD_TOOLS_VERSION: '35.0.0'
+  # Match the official Qt 6.12 Android prerequisites and binary kit toolchain.
+  NDK_VERSION: '27.2.12479018'
+  BUILD_TOOLS_VERSION: '36.0.0'
   CMAKE_BUILD_PARALLEL_LEVEL: '2'
   PYTHONDONTWRITEBYTECODE: '1'
 
@@ -40,9 +41,9 @@ jobs:
       - name: Prepare Android tools
         shell: bash
         run: |
-          test -d "$JAVA_HOME_17_X64"
-          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
-          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          test -d "$JAVA_HOME_21_X64"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_21_X64/bin" >> "$GITHUB_PATH"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
           echo "GRADLE_USER_HOME=$GITHUB_WORKSPACE/.scratch/android-gradle" >> "$GITHUB_ENV"
           mkdir -p .scratch/android-gradle
@@ -50,13 +51,13 @@ jobs:
             'org.gradle.jvmargs=-Xmx3g' > .scratch/android-gradle/gradle.properties
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           (set +o pipefail; yes | "$sdkmanager" --licenses >/dev/null)
-          "$sdkmanager" "ndk;$NDK_VERSION" 'platforms;android-35' "build-tools;$BUILD_TOOLS_VERSION"
+          "$sdkmanager" "ndk;$NDK_VERSION" 'platform-tools' 'platforms;android-36' "build-tools;$BUILD_TOOLS_VERSION"
           sudo apt-get update
           sudo apt-get install --yes ninja-build patchelf
       - name: Install primary Android Qt kit and host tools
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
-          version: '6.8.3'
+          version: ${{ env.QT_VERSION }}
           host: linux
           target: android
           arch: android_arm64_v8a
@@ -71,7 +72,7 @@ jobs:
       - name: Install Android x86_64 kit
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
-          version: '6.8.3'
+          version: ${{ env.QT_VERSION }}
           host: linux
           target: android
           arch: android_x86_64
@@ -132,7 +133,7 @@ jobs:
       - name: Launch the signed GUI in an x86_64 emulator
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
-          api-level: 35
+          api-level: 36
           arch: x86_64
           target: default
           cores: 2

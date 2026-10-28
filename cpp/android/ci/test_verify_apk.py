@@ -23,19 +23,22 @@ class ApkVerificationTests(unittest.TestCase):
         self.badging = "package: name='io.github.cheviiot.puls' versionCode='4000' versionName='0.4.0-cpp-dev'\n"
         self.permissions = "uses-permission: name='android.permission.INTERNET'\n"
 
-    def package(self, missing=None, wrong_machine=False):
+    def package(self, missing=None, wrong_machine=False, alignment=16384):
         with zipfile.ZipFile(self.apk, "w") as archive:
             for abi, machine in (("arm64-v8a", 183), ("x86_64", 62)):
                 header = bytearray(64)
                 header[:6] = b"\x7fELF\x02\x01"
                 struct.pack_into("<H", header, 18, 183 if wrong_machine else machine)
+                struct.pack_into("<Q", header, 32, 64)
+                struct.pack_into("<HH", header, 54, 56, 1)
+                program = struct.pack("<IIQQQQQQ", 1, 5, 0, 0, 0, 120, 120, alignment)
                 libraries = [f"puls_{abi}", "crypto_3", "ssl_3"] + [f"{name}_{abi}" for name in (
                     "Qt6Core", "Qt6Gui", "Qt6Widgets", "Qt6Network", "Qt6WebSockets", "plugins_tls_qopensslbackend")]
                 for library in libraries:
                     name = f"lib/{abi}/lib{library}.so"
                     if missing and missing in name:
                         continue
-                    archive.writestr(name, header)
+                    archive.writestr(name, header + program)
             for notice in ("openssl_license", "puls_license", "qt_lgpl_3_0_only"):
                 archive.writestr(f"res/raw/{notice}.txt", "synthetic notice")
 
@@ -56,6 +59,7 @@ class ApkVerificationTests(unittest.TestCase):
         self.assertEqual(result["abis"], ["arm64-v8a", "x86_64"])
         self.assertEqual(result["permissions"], ["android.permission.INTERNET"])
         self.assertTrue(result["signature_verified"])
+        self.assertEqual(result["native_page_alignment"], 16384)
 
     def test_additional_permission_is_rejected(self):
         self.package()
@@ -71,6 +75,25 @@ class ApkVerificationTests(unittest.TestCase):
     def test_wrong_native_architecture_is_rejected(self):
         self.package(wrong_machine=True)
         with self.assertRaisesRegex(ValueError, "wrong-architecture"):
+            self.verify()
+
+    def test_4k_native_library_is_rejected(self):
+        self.package(alignment=4096)
+        with self.assertRaisesRegex(ValueError, "16 KiB"):
+            self.verify()
+
+    def test_elf_without_loadable_segments_is_rejected(self):
+        self.package()
+        with zipfile.ZipFile(self.apk) as archive:
+            original = {name: archive.read(name) for name in archive.namelist()}
+        name = "lib/x86_64/libQt6Network_x86_64.so"
+        broken = bytearray(original[name])
+        struct.pack_into("<I", broken, 64, 0)  # PT_NULL
+        original[name] = broken
+        with zipfile.ZipFile(self.apk, "w") as archive:
+            for name, contents in original.items():
+                archive.writestr(name, contents)
+        with self.assertRaisesRegex(ValueError, "no loadable"):
             self.verify()
 
     def test_debug_package_and_wrong_version_are_rejected(self):

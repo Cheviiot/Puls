@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Qt's Android TLS plugin loads the _3 suffix. Build the exact verified source
 # for Bionic; the device's private BoringSSL is not a compatible substitute.
-# Source: https://doc.qt.io/qt-6.8/android-openssl-support.html
+# Source: https://doc.qt.io/qt-6.12/android-openssl-support.html
 openssl_version=3.5.9
 openssl_sha256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 output=${1:?usage: build_openssl.sh OUTPUT_DIRECTORY}
