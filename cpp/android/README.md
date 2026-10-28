@@ -35,6 +35,8 @@ build directory. Both the application and OpenSSL use 16 KiB ELF alignment;
 the APK verifier checks all packaged native libraries and ZIP alignment.
 The [Qt OpenSSL documentation](https://doc.qt.io/qt-6.12/android-openssl-support.html)
 explains the `_3` suffix and why Android's private TLS libraries cannot be used.
+Android sets `ANDROID_OPENSSL_SUFFIX=_3` at the start of `main()`, before Qt
+can initialize its TLS backend.
 
 Signing is restricted to trusted repository jobs with the existing
 `PULS_ANDROID_KEYSTORE_BASE64`, `PULS_ANDROID_KEYSTORE_PASSWORD`,
@@ -45,6 +47,17 @@ artifacts; this workflow does not publish a release.
 
 `PULS_ANDROID_VERSION_CODE` follows the existing stable release formula
 `major * 1000000 + minor * 1000 + patch`; `0.4.0-cpp-dev` uses `4000`.
-The emulator proof covers installation, foreground launch, a screenshot, and
-background/resume. It does not start public measurements or collect IP data;
-actual Android measurement acceptance remains a separate check.
+The emulator proof covers installation, foreground launch, TLS backend loading,
+a screenshot, and background/resume. CI starts the activity with the private
+boolean intent extra `puls.runtime_probe=true`. Only that opt-in prints one
+`PULS_RUNTIME_PROBE` JSON record containing `ssl_available`, `ssl_backend`, and
+`qt_version`. The smoke test reads logcat only for the application PID,
+requires working OpenSSL support, and saves only these capability fields in
+`smoke.json`. Full logs are neither saved nor published. No public command or
+flag is added, and no probe runs during normal GUI launch.
+
+This capability check does not make HTTP requests, start public measurements,
+or collect IP data; actual Android measurement acceptance remains a separate
+check. The JNI calls use Qt's public
+[Android application context](https://doc.qt.io/qt-6/qnativeinterface-qandroidapplication.html)
+and [QJniObject](https://doc.qt.io/qt-6/qjniobject.html) interfaces.

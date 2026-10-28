@@ -272,6 +272,9 @@ int runtimeProbe(int& argc, char** argv) {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifdef Q_OS_ANDROID
+    qputenv("ANDROID_OPENSSL_SUFFIX", "_3");
+#endif
 #ifdef Q_OS_WIN
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);

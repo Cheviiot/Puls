@@ -31,12 +31,38 @@
 #include <QThread>
 #include <QTimer>
 #include <QVBoxLayout>
+#ifdef Q_OS_ANDROID
+#include <QCoreApplication>
+#include <QDebug>
+#include <QJniObject>
+#include <QJsonDocument>
+#include <QSslSocket>
+#endif
 #include <algorithm>
 #include <cmath>
 #include <utility>
 
 namespace puls {
 namespace {
+#ifdef Q_OS_ANDROID
+void reportAndroidRuntimeProbe() {
+    if (!QNativeInterface::QAndroidApplication::isActivityContext()) return;
+    const QJniObject activity = QNativeInterface::QAndroidApplication::context();
+    if (!activity.isValid()) return;
+    const QJniObject intent = activity.callObjectMethod("getIntent", "()Landroid/content/Intent;");
+    if (!intent.isValid()) return;
+    const QJniObject key = QJniObject::fromString(QStringLiteral("puls.runtime_probe"));
+    if (intent.callMethod<jboolean>("getBooleanExtra", "(Ljava/lang/String;Z)Z",
+                                   key.object<jstring>(), JNI_FALSE) != JNI_TRUE) return;
+    const bool sslAvailable = QSslSocket::supportsSsl();
+    const QJsonObject result{{"ssl_available", sslAvailable},
+                             {"ssl_backend", QSslSocket::activeBackend()},
+                             {"qt_version", QString::fromLatin1(qVersion())}};
+    qInfo().noquote().nospace() << "PULS_RUNTIME_PROBE "
+                              << QJsonDocument(result).toJson(QJsonDocument::Compact);
+}
+#endif
+
 QString phaseName(const QString& phase) {
     if (phase == "select") return QStringLiteral("Выбор сервера измерения…");
     if (phase == "ping") return QStringLiteral("Измеряем задержку…");
@@ -909,6 +935,9 @@ QWidget* createMainWindow(const Config& initial, BackendFactory factory) {
 
 int runGUI(int& argc, char** argv, const Config& initial) {
     QApplication application(argc, argv);
+#ifdef Q_OS_ANDROID
+    reportAndroidRuntimeProbe();
+#endif
     QApplication::setApplicationName(QStringLiteral("Puls"));
     QApplication::setOrganizationName(QStringLiteral("Puls"));
     QApplication::setApplicationVersion(versionText().trimmed().section(' ', 1));
