@@ -1,6 +1,25 @@
 name: C++ Android
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: Public version label without a v prefix
+        type: string
+        default: '0.4.0-cpp-dev'
+      version_code:
+        description: Monotonic Android version code
+        type: string
+        default: '4000'
+    secrets:
+      PULS_ANDROID_KEYSTORE_BASE64:
+        required: true
+      PULS_ANDROID_KEYSTORE_PASSWORD:
+        required: true
+      PULS_ANDROID_KEY_ALIAS:
+        required: true
+      PULS_ANDROID_KEY_PASSWORD:
+        required: true
   push:
     branches: [main, 'codex/cpp-*']
     paths: ['cpp/**', 'cmake/**', 'CMakeLists.txt', '.github/workflows/cpp-android.yml', 'internal/gui/assets/Icon.png']
@@ -17,10 +36,10 @@ concurrency:
 
 env:
   QT_VERSION: '6.12.0'
-  RELEASE_VERSION: '0.4.0-cpp-dev'
+  RELEASE_VERSION: ${{ inputs.version || '0.4.0-cpp-dev' }}
   # Keep the stable release formula: major * 1000000 + minor * 1000 + patch.
   # This exceeds the preceding 0.3.3 APK's version code (3003).
-  ANDROID_VERSION_CODE: '4000'
+  ANDROID_VERSION_CODE: ${{ inputs.version_code || '4000' }}
   # Match the official Qt 6.12 Android prerequisites and binary kit toolchain.
   NDK_VERSION: '27.2.12479018'
   BUILD_TOOLS_VERSION: '36.0.0'
