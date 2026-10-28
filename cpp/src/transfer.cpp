@@ -49,6 +49,7 @@ bool stopped(const Shared& shared, const Cancellation& cancellation) {
 struct JoinWorkers {
     Shared& shared;
     std::vector<std::thread>& threads;
+    JoinWorkers(Shared& state, std::vector<std::thread>& workers) : shared(state), threads(workers) {}
     ~JoinWorkers() {
         shared.stop.store(true);
         shared.changed.notify_all();

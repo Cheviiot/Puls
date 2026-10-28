@@ -55,8 +55,8 @@ void testParseMeasurementCommands() {
     struct Case {
         QStringList args;
         QString service;
-        int duration;
-        int connections;
+        int duration = 0;
+        int connections = 0;
         QString only;
     };
     const std::vector<Case> cases{
@@ -488,7 +488,17 @@ public:
                 connect(socket, &QTcpSocket::readyRead, socket, [this, socket, request, handled] {
                     if (*handled) { socket->readAll(); return; }
                     request->append(socket->readAll());
-                    if (!request->contains("\r\n\r\n")) return;
+                    const auto headerEnd = request->indexOf("\r\n\r\n");
+                    if (headerEnd < 0) return;
+                    qint64 bodySize = 0;
+                    for (auto row : request->left(headerEnd).split('\n')) {
+                        row = row.trimmed();
+                        if (row.toLower().startsWith("content-length:")) bodySize = row.mid(15).trimmed().toLongLong();
+                    }
+                    // Reply only after the request is complete. An early 503
+                    // while the client is still writing a 2 MiB upload makes
+                    // Qt's transport retry behavior platform dependent.
+                    if (request->size() - headerEnd - 4 < bodySize) return;
                     *handled = true;
                     const auto firstLine = request->left(request->indexOf("\r\n"));
                     const auto response = handler_(firstLine);
@@ -690,6 +700,8 @@ void testRunnerRoutesExplicitQmsThroughput() {
         expect(value.value("status") == "error" && value.value("mbps").isNull(),
                "QMS transfer failure stays typed and has no numeric speed");
     }
+    if (tokens != 2 || transfers != 4)
+        std::cerr << "QMS routing mock: tokens=" << tokens << ", transfers=" << transfers << '\n';
     expect(tokens == 2 && transfers == 4,
            "explicit QMS backend uses JWT POST and routes both transfer methods to the selected host");
 }

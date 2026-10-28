@@ -217,7 +217,7 @@ void testZeroBytesIsAnError() {
 }
 
 void testCancellationAtStartupWarmupAndMeasurement() {
-    auto runCanceled = [](RunConfig runConfig, bool readyImmediately) {
+    auto runCanceled = [](const RunConfig& runConfig, bool readyImmediately) {
         puls::Cancellation cancellation;
         std::atomic_bool exited{false};
         RunResult result;
@@ -378,19 +378,24 @@ void testTransferDiagnosticsSurviveFailedPhase() {
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
-    testReadinessWarmupAndDeadlineAccounting();
-    testStartupTimeoutJoinsWorker();
-    testAllWorkersFailEvenAfterBytes();
-    testMeasurementTimerStartsAfterFirstReady();
-    testPartialWorkerSuccessAndAggregatedError();
-    testOnlyOneReconnect();
-    testConfigurationAndAdaptiveCap();
-    testZeroBytesIsAnError();
-    testCancellationAtStartupWarmupAndMeasurement();
-    testProgressRunsOnCoordinatorAndElapsedExcludesTeardown();
-    testLateCoordinatorCannotAdmitAfterDeadlineBytes();
-    testCallbackExceptionsJoinWorkers();
-    testTransferDiagnosticsSurviveFailedPhase();
+    try {
+        testReadinessWarmupAndDeadlineAccounting();
+        testStartupTimeoutJoinsWorker();
+        testAllWorkersFailEvenAfterBytes();
+        testMeasurementTimerStartsAfterFirstReady();
+        testPartialWorkerSuccessAndAggregatedError();
+        testOnlyOneReconnect();
+        testConfigurationAndAdaptiveCap();
+        testZeroBytesIsAnError();
+        testCancellationAtStartupWarmupAndMeasurement();
+        testProgressRunsOnCoordinatorAndElapsedExcludesTeardown();
+        testLateCoordinatorCannotAdmitAfterDeadlineBytes();
+        testCallbackExceptionsJoinWorkers();
+        testTransferDiagnosticsSurviveFailedPhase();
+    } catch (const std::exception& error) {
+        std::cerr << "Unexpected test exception: " << error.what() << '\n';
+        ++failures;
+    }
     if (failures) std::cerr << failures << " transfer test(s) failed\n";
     return failures == 0 ? 0 : 1;
 }

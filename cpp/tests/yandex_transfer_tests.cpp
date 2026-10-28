@@ -126,7 +126,7 @@ private:
     Handler handler_;
 };
 
-void respond(QTcpSocket* socket, int status, QByteArray headers = {}, QByteArray body = {}) {
+void respond(QTcpSocket* socket, int status, const QByteArray& headers = {}, const QByteArray& body = {}) {
     socket->write("HTTP/1.1 " + QByteArray::number(status) + " Test\r\nConnection: close\r\n" + headers + "\r\n" + body);
     socket->disconnectFromHost();
 }
@@ -183,7 +183,7 @@ void testDownloadConfirmedBytes() {
 }
 
 void testDownloadRejectsInvalidResponses() {
-    struct Case { int status; QByteArray headers; QByteArray body; QString code; QString path; };
+    struct Case { int status = 0; QByteArray headers; QByteArray body; QString code; QString path; };
     const QList<Case> cases{
         {200, "Content-Type: text/html\r\nContent-Length: 4\r\n", "html", "protocol", "/"},
         {200, "Content-Type: application/octet-stream\r\nContent-Length: 4\r\nContent-Encoding: gzip\r\n", "xxxx", "protocol", "/"},
@@ -238,7 +238,7 @@ void testHTTPUploadConfirmedBlocks() {
 }
 
 void testHTTPUploadRejectsInvalidResponses() {
-    struct Case { int status; QByteArray headers; QByteArray body; QString code; };
+    struct Case { int status = 0; QByteArray headers; QByteArray body; QString code; };
     const QList<Case> cases{
         {500, "Content-Length: 0\r\n", {}, "unavailable"},
         {403, "Content-Length: 0\r\n", {}, "auth"},

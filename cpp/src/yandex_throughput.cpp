@@ -211,6 +211,8 @@ bool downloadProbe(QNetworkAccessManager& manager, const QUrl& rawUrl,
         fail(phase, QStringLiteral("timeout"), QStringLiteral("истекло время ожидания пробы скачивания"), true);
     drain();
     if (worker.stopped() || stopped) return false;
+    // drain() can reject a newly read chunk and assign error.
+    // cppcheck-suppress identicalConditionAfterEarlyExit
     if (error) throw *error;
     checkNetwork(*reply, phase);
     if (!validated || received <= 0 || received != expected)
@@ -291,6 +293,8 @@ void httpUpload(QNetworkAccessManager& manager, const QUrl& rawUrl,
         if (timedOut)
             fail(phase, QStringLiteral("timeout"), QStringLiteral("истекло время ожидания HTTP при отдаче"), true);
         drain();
+        // drain() can reject a newly read chunk and assign error.
+        // cppcheck-suppress identicalConditionAfterEarlyExit
         if (error) throw *error;
         checkNetwork(*reply, phase);
         if (!validated || (expected && received != *expected))

@@ -83,8 +83,8 @@ private:
         return {};
     }
 
-    void reply(QTcpSocket* socket, int status, QByteArray contentType, QByteArray body,
-               QByteArray extraHeaders = {}) {
+    void reply(QTcpSocket* socket, int status, const QByteArray& contentType, const QByteArray& body,
+               const QByteArray& extraHeaders = {}) {
         const QByteArray reason = status == 200 ? "OK" : status == 204 ? "No Content" :
                                   status == 403 ? "Forbidden" : status == 401 ? "Unauthorized" : "Bad Request";
         QByteArray response = "HTTP/1.1 " + QByteArray::number(status) + " " + reason + "\r\n";
