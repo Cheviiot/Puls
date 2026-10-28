@@ -553,8 +553,12 @@ public:
                 if (!parsed.isValid() || parsed.host().isEmpty() || parsed.port(-1) < 1 || parsed.port(-1) > 65535 || !parsed.userInfo().isEmpty())
                     fail(id(), QStringLiteral("select"), QStringLiteral("internal"), QStringLiteral("неверный адрес сервера"));
                 selected_ = QmsServer{host, host, {}, {}, 0, {}};
+                throughput_ = true;
+                fallback_ = false;
                 return serverJson(selected_);
             }
+            fallback_ = false;
+            try {
             const auto url = options_.speedtestBase.resolved(QUrl(QStringLiteral("/api/nearest_servers?t=") + QString::number(QDateTime::currentMSecsSinceEpoch())));
             auto key = session_.browserKey;
             auto request = requestFor(url);
@@ -592,7 +596,19 @@ public:
             std::stable_sort(responsive.begin(), responsive.end(), [](const auto& a, const auto& b) { return a.median < b.median; });
             selected_ = responsive.first();
             candidates_ = responsive.mid(0, static_cast<int>(std::min<qsizetype>(4, responsive.size())));
+            throughput_ = true;
             return serverJson(selected_);
+            } catch (const OpError& error) {
+                if (error.code == QStringLiteral("canceled") || cancellation.canceled()) throw;
+                const QStringList fallbackHosts = options_.speedtestFallbackHosts.value_or(QStringList{
+                    QStringLiteral("vladivostok.qms.ru:20000"), QStringLiteral("vladivostok10.qms.ru:20000"),
+                    QStringLiteral("khabarovsk1.qms.ru:20000"), QStringLiteral("blagoveshchensk.qms.ru:20000"),
+                    QStringLiteral("yuzhno-sahalinsk.qms.ru:20000"), QStringLiteral("chita.qms.ru:20000"),
+                    QStringLiteral("ulan-ude.qms.ru:20000"), QStringLiteral("yakutsk.qms.ru:20000"),
+                    QStringLiteral("magadan.qms.ru:20000")});
+                if (fallbackHosts.isEmpty()) throw;
+                return selectFallback(fallbackHosts, cancellation, error.message);
+            }
         } catch (const OpError&) { throw; }
     }
     QJsonObject ping(const Config&, const Cancellation& cancellation) override {
@@ -687,6 +703,8 @@ private:
     }
     QList<QUrl> measurementServers(const QString& phase) const {
         if (selected_.host.isEmpty()) fail(id(), phase, "internal", QStringLiteral("сначала выберите сервер"));
+        if (fallback_ || !throughput_)
+            fail(id(), phase, QStringLiteral("auth"), QStringLiteral("встроенный список speedtest.ru поддерживает только проверку задержки"), true);
         QList<QUrl> urls;
         auto append = [&](const QString& host) {
             QUrl url(QStringLiteral("https://") + host + '/');
@@ -696,6 +714,44 @@ private:
         append(selected_.host);
         for (const auto& candidate : candidates_) append(candidate.host);
         return urls;
+    }
+    QJsonObject selectFallback(const QStringList& hosts, const Cancellation& cancellation,
+                               const QString& discoveryError) {
+        const QHash<QString, QString> cities{
+            {QStringLiteral("vladivostok.qms.ru:20000"), QStringLiteral("Владивосток")},
+            {QStringLiteral("vladivostok10.qms.ru:20000"), QStringLiteral("Владивосток")},
+            {QStringLiteral("khabarovsk1.qms.ru:20000"), QStringLiteral("Хабаровск")},
+            {QStringLiteral("blagoveshchensk.qms.ru:20000"), QStringLiteral("Благовещенск")},
+            {QStringLiteral("yuzhno-sahalinsk.qms.ru:20000"), QStringLiteral("Южно-Сахалинск")},
+            {QStringLiteral("chita.qms.ru:20000"), QStringLiteral("Чита")},
+            {QStringLiteral("ulan-ude.qms.ru:20000"), QStringLiteral("Улан-Удэ")},
+            {QStringLiteral("yakutsk.qms.ru:20000"), QStringLiteral("Якутск")},
+            {QStringLiteral("magadan.qms.ru:20000"), QStringLiteral("Магадан")}};
+        QList<QmsServer> candidates;
+        candidates.reserve(hosts.size());
+        for (const auto& rawHost : hosts) {
+            const QString host = normalizeHost(rawHost);
+            const QUrl parsed(QStringLiteral("wss://") + host + QStringLiteral("/"), QUrl::StrictMode);
+            if (host.isEmpty() || !parsed.isValid() || parsed.host().isEmpty() ||
+                parsed.port(-1) < 1 || parsed.port(-1) > 65535 || !parsed.userInfo().isEmpty()) continue;
+            if (std::none_of(candidates.cbegin(), candidates.cend(), [&](const QmsServer& item) { return item.host == host; }))
+                candidates.append({host, host, cities.value(host), {}, 0, {}});
+        }
+        if (candidates.isEmpty())
+            fail(id(), QStringLiteral("select"), QStringLiteral("unavailable"),
+                 QStringLiteral("резервный список серверов speedtest.ru пуст или некорректен"), true);
+        auto responsive = probeCandidates(candidates, cancellation);
+        if (responsive.isEmpty())
+            fail(id(), QStringLiteral("select"), QStringLiteral("unavailable"),
+                 QStringLiteral("ни один встроенный сервер speedtest.ru не ответил на ping (%1)").arg(discoveryError), true);
+        std::stable_sort(responsive.begin(), responsive.end(), [](const auto& left, const auto& right) {
+            return left.median < right.median;
+        });
+        selected_ = responsive.first();
+        candidates_.clear();
+        throughput_ = false;
+        fallback_ = true;
+        return serverJson(selected_);
     }
     bool probe(const QString& host, int count, const Cancellation& cancellation, QList<double>* samples,
                const QString& phase, QString* failureCode = nullptr,
@@ -858,6 +914,8 @@ private:
     SpeedtestSession session_;
     QmsServer selected_;
     QList<QmsServer> candidates_;
+    bool throughput_ = false;
+    bool fallback_ = false;
     QElapsedTimer phaseClock_;
 };
 } // namespace
@@ -874,8 +932,19 @@ std::unique_ptr<Backend> makeBackendForTesting(const QString& service, const Bac
         (base.scheme() != QStringLiteral("http") && base.scheme() != QStringLiteral("https")) ||
         !base.userInfo().isEmpty() || !base.query().isEmpty() || !base.fragment().isEmpty())
         throw std::invalid_argument("test endpoints must be loopback and explicitly enabled");
-    if (service == QStringLiteral("yandex")) return std::make_unique<YandexBackend>(options);
-    if (service == QStringLiteral("speedtest")) return std::make_unique<SpeedtestBackend>(options);
+    BackendOptions isolated = options;
+    if (service == QStringLiteral("speedtest")) {
+        if (!isolated.speedtestFallbackHosts.has_value()) isolated.speedtestFallbackHosts = QStringList{};
+        for (const auto& candidate : *isolated.speedtestFallbackHosts) {
+            const QUrl url(QStringLiteral("wss://") + candidate + QStringLiteral("/"), QUrl::StrictMode);
+            if (!url.isValid() || url.host().isEmpty() || !isLoopback(url.host()) ||
+                url.port(-1) < 1 || url.port(-1) > 65535 || !url.userInfo().isEmpty() ||
+                !url.query().isEmpty() || !url.fragment().isEmpty() || url.path() != QStringLiteral("/"))
+                throw std::invalid_argument("test fallback hosts must be loopback addresses with explicit ports");
+        }
+    }
+    if (service == QStringLiteral("yandex")) return std::make_unique<YandexBackend>(isolated);
+    if (service == QStringLiteral("speedtest")) return std::make_unique<SpeedtestBackend>(isolated);
     throw std::invalid_argument("unknown service");
 }
 
