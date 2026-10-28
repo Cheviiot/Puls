@@ -73,31 +73,56 @@ jobs:
           "$sdkmanager" "ndk;$NDK_VERSION" 'platform-tools' 'platforms;android-36' "build-tools;$BUILD_TOOLS_VERSION"
           sudo apt-get update
           sudo apt-get install --yes ninja-build patchelf
-      - name: Install primary Android Qt kit and host tools
+      - name: Set up Python for the pinned Android installer
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install matching desktop Qt host tools
         uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
         with:
+          dir: ${{ github.workspace }}/.scratch
           version: ${{ env.QT_VERSION }}
           host: linux
-          target: android
-          arch: android_arm64_v8a
-          modules: qtwebsockets
-          extra: --autodesktop
-          cache: true
-      - name: Keep the primary kit path
-        shell: bash
-        run: |
-          test -x "$QT_ROOT_DIR/bin/qt-cmake"
-          echo "PULS_ANDROID_QT_ROOT=$QT_ROOT_DIR" >> "$GITHUB_ENV"
-      - name: Install Android x86_64 kit
-        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4.5.0
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: linux
-          target: android
-          arch: android_x86_64
-          modules: qtwebsockets
+          target: desktop
+          arch: linux_gcc_64
+          setup-python: false
+          aqtversion: '==3.3.0'
+          py7zrversion: '==1.1.4'
           set-env: false
           cache: true
+          cache-key-prefix: puls-android-host-qt-v1
+      - name: Cache Android Qt kits
+        id: android-qt-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            .scratch/Qt/${{ env.QT_VERSION }}/android_arm64_v8a
+            .scratch/Qt/${{ env.QT_VERSION }}/android_x86_64
+          key: qt-android-${{ runner.os }}-${{ runner.arch }}-${{ env.QT_VERSION }}-aqt3.3.0-v1
+      - name: Install exact Android Qt kits without version discovery
+        if: steps.android-qt-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python -m venv .scratch/android-aqt
+          .scratch/android-aqt/bin/python -m pip install --disable-pip-version-check \
+            'aqtinstall==3.3.0' 'py7zr==1.1.4'
+          # install-qt-action's Android list-qt preflight misses the all_os
+          # Qt 6.12 repository. Exact install-qt resolves its ABI metadata.
+          .scratch/android-aqt/bin/python -m aqt install-qt linux android \
+            "$QT_VERSION" android_arm64_v8a --modules qtwebsockets \
+            --outputdir "$GITHUB_WORKSPACE/.scratch/Qt"
+          .scratch/android-aqt/bin/python -m aqt install-qt linux android \
+            "$QT_VERSION" android_x86_64 --modules qtwebsockets \
+            --outputdir "$GITHUB_WORKSPACE/.scratch/Qt"
+      - name: Check the primary, secondary and host Qt paths
+        shell: bash
+        run: |
+          qt="$GITHUB_WORKSPACE/.scratch/Qt/$QT_VERSION"
+          test -x "$qt/android_arm64_v8a/bin/qt-cmake"
+          test -x "$qt/android_x86_64/bin/qt-cmake"
+          test -x "$qt/gcc_64/bin/qt-cmake"
+          echo "PULS_ANDROID_QT_ROOT=$qt/android_arm64_v8a" >> "$GITHUB_ENV"
+          echo "PULS_ANDROID_HOST_QT_ROOT=$qt/gcc_64" >> "$GITHUB_ENV"
       - name: Build verified OpenSSL 3 for both ABIs
         shell: bash
         run: bash cpp/android/ci/build_openssl.sh "$GITHUB_WORKSPACE/.scratch/android-openssl"
@@ -111,6 +136,7 @@ jobs:
             -DPULS_ANDROID_OPENSSL_ROOT="$GITHUB_WORKSPACE/.scratch/android-openssl" \
             '-DQT_ANDROID_ABIS=arm64-v8a;x86_64' -DQT_ANDROID_SIGN_APK=OFF \
             -DQT_ANDROID_DEPLOYMENT_TYPE=RELEASE \
+            -DQT_HOST_PATH="$PULS_ANDROID_HOST_QT_ROOT" \
             -DANDROID_SDK_ROOT="$ANDROID_HOME" -DANDROID_NDK_ROOT="$ANDROID_NDK_ROOT"
           ionice -c 3 nice -n 19 cmake --build .scratch/android-build --target apk --parallel 2
           test -f .scratch/android-build/android-build/puls.apk
