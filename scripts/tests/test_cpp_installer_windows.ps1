@@ -7,9 +7,9 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $installer = Join-Path $repoRoot "scripts\install.ps1"
-$scratch = Join-Path ([IO.Path]::GetTempPath()) ("puls-cpp-installer-test-" + [Guid]::NewGuid().ToString("N"))
+$scratch = Join-Path (Join-Path $repoRoot ".scratch") ("puls-cpp-installer-test-" + [Guid]::NewGuid().ToString("N"))
 $releases = Join-Path $scratch "releases"
-$home = Join-Path $scratch "home"
+$testHome = Join-Path $scratch "home"
 $installDir = Join-Path $scratch "custom install"
 $originalUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 $serverJob = $null
@@ -28,7 +28,7 @@ function New-TestRelease([string]$Version, [string]$Label) {
     $packageRoot = Join-Path $scratch $packageName
     New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot "bin"), (Join-Path $packageRoot "lib"), (Join-Path $packageRoot "plugins"), (Join-Path $packageRoot "assets") | Out-Null
     $className = "PulsSmoke" + [Guid]::NewGuid().ToString("N")
-    $smokeSource = 'public static class {0} { public static int Main(string[] args) { System.Console.WriteLine("Puls runtime smoke"); return 0; } }' -f $className
+    $smokeSource = 'public static class __PULS_SMOKE_CLASS__ { public static int Main(string[] args) { System.Console.WriteLine("Puls runtime smoke"); return 0; } }'.Replace("__PULS_SMOKE_CLASS__", $className)
     Add-Type -TypeDefinition $smokeSource -Language CSharp -OutputType ConsoleApplication -OutputAssembly (Join-Path $packageRoot "bin\puls.exe")
     [IO.File]::WriteAllText((Join-Path $packageRoot "lib\runtime.data"), "runtime $Label", [Text.Encoding]::ASCII)
     [IO.File]::WriteAllText((Join-Path $packageRoot "plugins\runtime.plugin"), "plugin $Label", [Text.Encoding]::ASCII)
@@ -49,6 +49,21 @@ function New-TestRelease([string]$Version, [string]$Label) {
     Remove-Item -Recurse -Force -LiteralPath $packageRoot
 }
 
+function Assert-CurrentRuntimeVersion([string]$ExpectedVersion, [string]$CurrentPath) {
+    $item = Get-Item -Force -LiteralPath $CurrentPath
+    $targets = @($item.Target)
+    if ($targets.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$targets[0])) {
+        throw "Current runtime junction does not expose exactly one target."
+    }
+    $target = [string]$targets[0]
+    if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path -Parent $CurrentPath) $target }
+    $actualTarget = [IO.Path]::GetFullPath($target).TrimEnd("\")
+    $expectedTarget = [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $CurrentPath) "versions\$ExpectedVersion")).TrimEnd("\")
+    if (-not [string]::Equals($actualTarget, $expectedTarget, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Current runtime junction targets '$actualTarget', expected '$expectedTarget'."
+    }
+}
+
 function Invoke-TestInstaller([string[]]$Arguments) {
     if (Test-Path -LiteralPath (Join-Path $PSHOME "pwsh.exe")) {
         $powerShell = Join-Path $PSHOME "pwsh.exe"
@@ -61,7 +76,7 @@ function Invoke-TestInstaller([string[]]$Arguments) {
 }
 
 try {
-    New-Item -ItemType Directory -Force -Path $releases, $home, $installDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $releases, $testHome, $installDir | Out-Null
     [IO.File]::WriteAllText((Join-Path $installDir "keep.txt"), "user data", [Text.Encoding]::UTF8)
     New-TestRelease "1.0.0" "one"
     New-TestRelease "2.0.0" "two"
@@ -101,7 +116,7 @@ try {
     Start-Sleep -Milliseconds 500
     $env:PULS_INSTALL_REPOSITORY_URL = $baseUrl
     $env:PULS_INSTALL_DIR = $installDir
-    $env:LOCALAPPDATA = $home
+    $env:LOCALAPPDATA = $testHome
 
     Invoke-TestInstaller @("-Version", "1.0.0", "-InstallDir", $installDir, "-NoShortcut") | Out-Null
     $current = Join-Path $installDir ".puls-runtime\current"
@@ -115,15 +130,15 @@ try {
     }
 
     Invoke-TestInstaller @("-Version", "2.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null
-    if ((Resolve-Path -LiteralPath $current).Path -notlike "*\versions\2.0.0") { throw "Runtime update did not switch current." }
+    Assert-CurrentRuntimeVersion -ExpectedVersion "2.0.0" -CurrentPath $current
     if (Test-Path -LiteralPath (Join-Path $installDir ".puls-runtime\versions\1.0.0")) { throw "Old owned runtime was not cleaned up." }
     Invoke-TestInstaller @("-Version", "2.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null
-    if ((Resolve-Path -LiteralPath $current).Path -notlike "*\versions\2.0.0") { throw "Same-version runtime reinstall failed." }
+    Assert-CurrentRuntimeVersion -ExpectedVersion "2.0.0" -CurrentPath $current
 
     [IO.File]::WriteAllText((Join-Path $installDir "puls.cmd"), "@echo off`r`nREM user replacement`r`n", [Text.Encoding]::ASCII)
     try { Invoke-TestInstaller @("-Version", "3.0.0", "-InstallDir", $installDir, "-NoPathUpdate", "-NoShortcut") | Out-Null; throw "Expected unmanaged shim rejection." }
     catch { if ($_.Exception.Message -notmatch "not managed by Puls") { throw } }
-    if ((Resolve-Path -LiteralPath $current).Path -notlike "*\versions\2.0.0") { throw "Failed update did not roll back current." }
+    Assert-CurrentRuntimeVersion -ExpectedVersion "2.0.0" -CurrentPath $current
     if (Test-Path -LiteralPath (Join-Path $installDir ".puls-runtime\versions\3.0.0")) { throw "Failed update left an unowned staged version." }
     [IO.File]::WriteAllText((Join-Path $installDir "puls.cmd"), "@echo off`r`nREM Puls installer managed v1`r`n", [Text.Encoding]::ASCII)
 

@@ -114,7 +114,8 @@ function Test-OwnedRuntime {
     $marker = Join-Path $Path ".puls-runtime-owner"
     if (-not (Test-Path -LiteralPath $Path -PathType Container) -or
         (Get-Item -Force -LiteralPath $Path).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
-        -not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        -not (Test-Path -LiteralPath $marker -PathType Leaf) -or
+        (Get-Item -Force -LiteralPath $marker).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
         return $false
     }
     return (Get-Content -Raw -LiteralPath $marker).Trim() -ceq "puls-installer-v1:$RuntimeVersion"
@@ -126,9 +127,16 @@ function Get-OwnedCurrentRuntime {
     if (-not (Test-Path -LiteralPath $current -PathType Container)) { return $null }
     $item = Get-Item -Force -LiteralPath $current
     if (-not $item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { return $null }
-    $resolved = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $current).Path)
-    $versions = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot "versions")).TrimEnd("\") + "\"
-    if (-not $resolved.StartsWith($versions, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    # Resolve-Path returns the junction path on Windows PowerShell; inspect
+    # the reparse point target and only accept a direct child of versions.
+    $targets = @($item.Target)
+    if ($targets.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$targets[0])) { return $null }
+    $versionsRoot = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot "versions")).TrimEnd("\")
+    $target = [string]$targets[0]
+    if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path -Parent $current) $target }
+    $resolved = [IO.Path]::GetFullPath($target).TrimEnd("\")
+    $expectedParent = [IO.Path]::GetDirectoryName($resolved)
+    if (-not [string]::Equals($expectedParent, $versionsRoot, [StringComparison]::OrdinalIgnoreCase)) { return $null }
     $runtimeVersion = Split-Path -Leaf $resolved
     if (-not (Test-OwnedRuntime -Path $resolved -RuntimeVersion $runtimeVersion)) { return $null }
     return $resolved
