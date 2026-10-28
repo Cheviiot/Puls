@@ -165,28 +165,88 @@ func TestCollectReleaseArtifactsMarksCapabilitiesAndAndroid(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowBuildsUniversalAPKFromBundle(t *testing.T) {
+func TestReleaseWorkflowUsesQtPipelinesAndManifestV2(t *testing.T) {
 	root, err := findProjectRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml"))
-	if err != nil {
-		t.Fatal(err)
+	read := func(name string) string {
+		t.Helper()
+		contents, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return string(contents)
 	}
-	contents := string(workflow)
+
+	release := read(".github/workflows/release.yml")
+	desktop := read(".github/workflows/cpp-release.yml")
+	android := read(".github/workflows/cpp-android.yml")
+	packager := read("scripts/release_cpp.py")
+
 	for _, want := range []string{
-		"-name '*.aab'",
-		"bundletool build-apks",
-		"--mode=universal",
-		`apk="dist/Puls_${RELEASE_VERSION}_android.apk"`,
+		`^v[0-9]+\.[0-9]+\.[0-9]+$`,
+		`build=$((major * 1000000 + minor * 1000 + patch))`,
+		"uses: ./.github/workflows/cpp-release.yml",
+		"uses: ./.github/workflows/cpp-android.yml",
+		"version: ${{ needs.validate.outputs.version }}",
+		"version_code: ${{ needs.validate.outputs.build }}",
+		"needs: [validate, desktop, android]",
+		"--android-apk \"${android_apks[0]}\"",
+		"PULS_ANDROID_KEYSTORE_BASE64: ${{ secrets.PULS_ANDROID_KEYSTORE_BASE64 }}",
+		"PULS_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.PULS_ANDROID_KEYSTORE_PASSWORD }}",
+		"PULS_ANDROID_KEY_ALIAS: ${{ secrets.PULS_ANDROID_KEY_ALIAS }}",
+		"PULS_ANDROID_KEY_PASSWORD: ${{ secrets.PULS_ANDROID_KEY_PASSWORD }}",
 	} {
-		if !strings.Contains(contents, want) {
-			t.Errorf("release workflow does not contain %q", want)
+		if !strings.Contains(release, want) {
+			t.Errorf("release orchestrator does not contain %q", want)
 		}
 	}
-	if strings.Contains(contents, "find cmd/puls -maxdepth 1 -type f -name '*.apk'") {
-		t.Error("release workflow still searches for an APK that fyne release does not produce")
+
+	for _, want := range []string{
+		"RELEASE_VERSION: ${{ inputs.version || '0.4.0-cpp-dev' }}",
+		"version: '6.12.0'",
+		"python-version: '3.12'",
+		"os: linux, arch: amd64",
+		"os: linux, arch: arm64",
+		"os: windows, arch: amd64",
+		"os: windows, arch: arm64",
+		"os: darwin, arch: amd64",
+		"os: darwin, arch: arm64",
+		"gui: OFF, nogui: true",
+		"--target \"${{ matrix.os }}/${{ matrix.arch }}\" --stage .scratch/relocated --output .scratch/archives --nogui",
+		"Download all six target archives",
+	} {
+		if !strings.Contains(desktop, want) {
+			t.Errorf("desktop workflow does not contain %q", want)
+		}
+	}
+
+	for _, want := range []string{
+		"QT_VERSION: '6.12.0'",
+		"NDK_VERSION: '27.2.12479018'",
+		"BUILD_TOOLS_VERSION: '36.0.0'",
+		"PULS_ANDROID_KEYSTORE_BASE64:",
+		"PULS_ANDROID_KEYSTORE_PASSWORD:",
+		"PULS_ANDROID_KEY_ALIAS:",
+		"PULS_ANDROID_KEY_PASSWORD:",
+		"PULS_ANDROID_KEYSTORE_BASE64 }}",
+		"PULS_ANDROID_KEYSTORE_PASSWORD }}",
+		"PULS_ANDROID_KEY_ALIAS }}",
+		"PULS_ANDROID_KEY_PASSWORD }}",
+	} {
+		if !strings.Contains(android, want) {
+			t.Errorf("Android workflow does not contain %q", want)
+		}
+	}
+
+	if !strings.Contains(packager, `"schema_version": 2`) {
+		t.Error("C++ release packager no longer writes manifest schema version 2")
+	}
+	for _, obsolete := range []string{"bundletool build-apks", "fyne release", "-name '*.aab'"} {
+		if strings.Contains(release, obsolete) {
+			t.Errorf("release orchestrator still contains obsolete Go/Fyne workflow step %q", obsolete)
+		}
 	}
 }
 
