@@ -84,7 +84,8 @@ def extract_source(archive: Path, destination: Path) -> Path:
     source = destination / SOURCE_ROOT
     required = (
         "configure",
-        ".cmake.conf",
+        "CMakeLists.txt",
+        "qtbase/.cmake.conf",
         "qtbase/CMakeLists.txt",
         "qtwebsockets/CMakeLists.txt",
         "qtwayland/CMakeLists.txt",

@@ -23,7 +23,7 @@ class QtLinuxSdkHelperTests(unittest.TestCase):
             self.assertEqual(qt_builder.sha256_file(source), hashlib.sha256(b"verified fixture").hexdigest())
 
     def test_extracts_minimal_source_fixture(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as temp_dir:
             root = Path(temp_dir)
             archive = root / "qt.tar.xz"
             source_root = root / qt_builder.SOURCE_ROOT
@@ -32,7 +32,8 @@ class QtLinuxSdkHelperTests(unittest.TestCase):
             (source_root / "qtwayland").mkdir()
             for relative in (
                 "configure",
-                ".cmake.conf",
+                "CMakeLists.txt",
+                "qtbase/.cmake.conf",
                 "qtbase/CMakeLists.txt",
                 "qtwebsockets/CMakeLists.txt",
                 "qtwayland/CMakeLists.txt",
@@ -43,6 +44,8 @@ class QtLinuxSdkHelperTests(unittest.TestCase):
 
             extracted = qt_builder.extract_source(archive, root / "extracted")
             self.assertEqual(extracted.name, qt_builder.SOURCE_ROOT)
+            self.assertTrue((extracted / "CMakeLists.txt").is_file())
+            self.assertTrue((extracted / "qtbase/.cmake.conf").is_file())
             self.assertTrue((extracted / "qtbase/CMakeLists.txt").is_file())
             self.assertTrue((extracted / "qtwebsockets/CMakeLists.txt").is_file())
             self.assertTrue((extracted / "qtwayland/CMakeLists.txt").is_file())
