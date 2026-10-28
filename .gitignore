@@ -4,6 +4,7 @@
 /build-*/
 /scripts/__pycache__/
 /scripts/tests/__pycache__/
+/cpp/android/ci/__pycache__/
 /puls
 /puls.exe
 *.apk
