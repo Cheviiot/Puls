@@ -189,6 +189,7 @@ def create_archive(stage: Path, output: Path, version: str, os_name: str, arch: 
         raise ReleaseError("windows/arm64 is CLI-only; pass --nogui")
     if nogui and not cli_only_target:
         raise ReleaseError("--nogui is only supported for windows/arm64")
+    stage = stage.resolve(strict=True)
     entries = collect_stage(stage, windows_target=os_name == "windows")
     executable = expected_executable(stage, os_name)
     executable_relative = executable.relative_to(stage.resolve()).as_posix()

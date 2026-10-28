@@ -321,10 +321,12 @@ class ReleaseCppTests(unittest.TestCase):
             release_cpp.assemble("1", inp, self.root / "out", None, ps1, None)
 
     def test_cli(self):
+        stage = self.stage()
         result = subprocess.run([sys.executable, str(SCRIPT), "package", "--version", "1", "--target", "linux/amd64",
-                                 "--stage", str(self.stage()), "--output", str(self.root / "out")],
-                                capture_output=True, text=True)
+                                 "--stage", stage.name, "--output", "out-relative"],
+                                cwd=self.root, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "out-relative" / "Puls_1_linux_amd64.tar.gz").is_file())
 
 
 if __name__ == "__main__":
