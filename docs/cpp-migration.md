@@ -33,7 +33,7 @@ C++ desktop и Qt Android сборки; публикация новой верс
 конкурентный C++ engine. Опубликованные стабильные версии собраны из Go;
 переносимая упаковка новой версии проверена на всех целевых платформах.
 
-Полный preflight 0.4.0 прошёл в [GitHub Actions](https://github.com/Cheviiot/Puls/actions/runs/40683213508):
+Полный preflight 0.4.0 прошёл в [GitHub Actions](https://github.com/Cheviiot/Puls/actions/runs/40687420798):
 шесть native desktop архивов, подписанный multi-ABI Android APK, общий manifest
 schema 2, SHA-256 и установщики. Windows installer проверяет установку,
 обновление, откат и удаление. Linux amd64 runtime дополнительно запущен прямо
