@@ -16,6 +16,14 @@ profile_file=""
 profile_line=""
 path_cleanup_changed=0
 profile_line_removed=0
+runtime_stage=""
+runtime_backup_version=""
+runtime_backup_current=""
+runtime_backup_launcher=""
+runtime_pointer_temp=""
+runtime_launcher_temp=""
+runtime_committed=0
+runtime_new_version=""
 
 say() {
   printf '%s\n' "$*"
@@ -26,9 +34,161 @@ fail() {
   exit 1
 }
 
+runtime_owned() {
+  owned_dir=$1
+  owned_version=$2
+  [ ! -L "$owned_dir" ] && [ -d "$owned_dir" ] && \
+    [ ! -L "$owned_dir/.puls-runtime-owner" ] && \
+    [ -f "$owned_dir/.puls-runtime-owner" ] && \
+    [ "$(cat "$owned_dir/.puls-runtime-owner" 2>/dev/null)" = "puls-installer-v1:$owned_version" ]
+}
+
+ensure_real_directory() {
+  ensure_dir=$1
+  if [ -L "$ensure_dir" ] || { [ -e "$ensure_dir" ] && [ ! -d "$ensure_dir" ]; }; then
+    fail "$ensure_dir уже существует и не является безопасным каталогом"
+  fi
+  mkdir -p "$ensure_dir"
+}
+
+validate_archive_members() {
+  validate_archive=$1
+  validate_root=$2
+  tar -tzf "$validate_archive" | awk -v root="$validate_root" '
+    BEGIN { prefix = root "/" }
+    {
+      name = $0
+      if (name == "" || name ~ /[\\\\\r\n]/ || name ~ /^\// || name ~ /^[A-Za-z]:/ || name ~ /(^|\/)\.\.(\/|$)/ || name ~ /(^|\/)\.\//) exit 1
+      if (name != root && index(name, prefix) != 1) exit 1
+    }
+  ' || fail "архив содержит небезопасные пути"
+}
+
+runtime_pointer_target() {
+  [ -L "$1" ] || return 1
+  pointer_value=$(readlink "$1") || return 1
+  case "$pointer_value" in
+    versions/*) pointer_version=${pointer_value#versions/} ;;
+    *) return 1 ;;
+  esac
+  case "$pointer_version" in
+    ""|.|..|*/*|*[!0-9A-Za-z._-]*) return 1 ;;
+  esac
+  runtime_owned "$runtime_versions/$pointer_version" "$pointer_version"
+}
+
+replace_symlink_atomically() {
+  replacement=$1
+  destination=$2
+  if [ "$target_os" = darwin ]; then
+    mv -fh "$replacement" "$destination"
+  else
+    mv -Tf "$replacement" "$destination"
+  fi
+}
+
+install_runtime_tree() {
+  runtime_source=$1
+  runtime_executable=$2
+  runtime_root=$install_dir/.puls-runtime
+  runtime_versions=$runtime_root/versions
+  runtime_current=$runtime_root/current
+  runtime_version_dir=$runtime_versions/$version
+  runtime_stage=$runtime_versions/.stage.$$
+  runtime_new_version=$runtime_version_dir
+  runtime_backup_version=$runtime_versions/.backup.$$.version
+  runtime_backup_current=$runtime_root/.backup.$$.current
+  runtime_backup_launcher=$install_dir/.puls-backup.$$.launcher
+
+  ensure_real_directory "$install_dir"
+  ensure_real_directory "$runtime_root"
+  ensure_real_directory "$runtime_versions"
+  if [ -e "$runtime_stage" ] || [ -L "$runtime_stage" ]; then
+    fail "временный runtime-каталог уже существует"
+  fi
+  cp -R "$runtime_source" "$runtime_stage" || fail "не удалось подготовить runtime"
+  printf 'puls-installer-v1:%s\n' "$version" > "$runtime_stage/.puls-runtime-owner" || fail "не удалось пометить runtime"
+  if [ ! -f "$runtime_stage/$runtime_executable" ] || [ -L "$runtime_stage/$runtime_executable" ]; then
+    fail "в runtime отсутствует исполняемый файл"
+  fi
+  chmod 0755 "$runtime_stage/$runtime_executable"
+
+  if [ -e "$runtime_version_dir" ] || [ -L "$runtime_version_dir" ]; then
+    runtime_owned "$runtime_version_dir" "$version" || fail "версия runtime уже существует и не принадлежит установщику Puls"
+    mv "$runtime_version_dir" "$runtime_backup_version" || fail "не удалось сохранить прежнюю версию runtime"
+  fi
+  mv "$runtime_stage" "$runtime_version_dir" || fail "не удалось установить runtime"
+  runtime_stage=""
+
+  if [ -e "$runtime_current" ] || [ -L "$runtime_current" ]; then
+    runtime_pointer_target "$runtime_current" || fail "указатель runtime существует, но не принадлежит установщику Puls"
+    ln -s "$(readlink "$runtime_current")" "$runtime_backup_current" || fail "не удалось сохранить прежний runtime"
+  fi
+  runtime_pointer_temp=$runtime_root/.current.$$.tmp
+  ln -s "versions/$version" "$runtime_pointer_temp" || fail "не удалось подготовить указатель runtime"
+  replace_symlink_atomically "$runtime_pointer_temp" "$runtime_current" || fail "не удалось переключить runtime"
+  runtime_pointer_temp=""
+
+  target_binary=$install_dir/puls
+  if [ -e "$target_binary" ] || [ -L "$target_binary" ]; then
+    if [ -L "$target_binary" ]; then
+      case "$(readlink "$target_binary")" in
+        .puls-runtime/current/*) ;;
+        *) fail "$target_binary уже существует и не принадлежит установщику Puls" ;;
+      esac
+    elif [ -f "$target_binary" ]; then
+      mv "$target_binary" "$runtime_backup_launcher" || fail "не удалось сохранить прежнюю команду puls"
+    else
+      fail "$target_binary не является обычным файлом"
+    fi
+  fi
+  runtime_launcher_temp=$install_dir/.puls.$$.tmp
+  case "$target_os:$runtime_executable" in
+    darwin:puls.app/Contents/MacOS/puls) launcher_target=.puls-runtime/current/puls.app/Contents/MacOS/puls ;;
+    *) launcher_target=.puls-runtime/current/bin/puls ;;
+  esac
+  ln -s "$launcher_target" "$runtime_launcher_temp" || fail "не удалось подготовить команду puls"
+  mv "$runtime_launcher_temp" "$target_binary" || fail "не удалось установить команду puls"
+  runtime_launcher_temp=""
+  runtime_committed=1
+  rm -f -- "$runtime_backup_current" "$runtime_backup_launcher" 2>/dev/null || :
+  if [ -n "$runtime_backup_version" ] && [ -e "$runtime_backup_version" ]; then
+    rm -rf -- "$runtime_backup_version" || :
+  fi
+  for old_runtime in "$runtime_versions"/*; do
+    [ -e "$old_runtime" ] || continue
+    old_version=${old_runtime##*/}
+    [ "$old_version" = "$version" ] && continue
+    if runtime_owned "$old_runtime" "$old_version"; then
+      rm -rf -- "$old_runtime" || :
+    fi
+  done
+  runtime_backup_current=""
+  runtime_backup_launcher=""
+  runtime_backup_version=""
+  runtime_new_version=""
+}
+
 cleanup() {
   cleanup_status=$?
   trap - EXIT
+  if [ "$runtime_committed" -ne 1 ]; then
+    if [ -n "$runtime_new_version" ] && runtime_owned "$runtime_new_version" "$version"; then
+      rm -rf -- "$runtime_new_version" || :
+    fi
+    if [ -n "$runtime_backup_launcher" ] && [ -e "$runtime_backup_launcher" ]; then
+      rm -f -- "$install_dir/puls" || :
+      mv "$runtime_backup_launcher" "$install_dir/puls" || :
+    fi
+    if [ -n "$runtime_backup_current" ] && [ -e "$runtime_backup_current" ]; then
+      rm -f -- "$install_dir/.puls-runtime/current" || :
+      mv "$runtime_backup_current" "$install_dir/.puls-runtime/current" || :
+    fi
+    if [ -n "$runtime_backup_version" ] && [ -e "$runtime_backup_version" ]; then
+      rm -rf -- "${runtime_versions:?}/$version" || :
+      mv "$runtime_backup_version" "$runtime_versions/$version" || :
+    fi
+  fi
   if [ -n "$temporary_dir" ]; then
     rm -rf -- "$temporary_dir" || :
   fi
@@ -41,6 +201,12 @@ cleanup() {
   if [ -n "$shortcut_temp" ]; then
     rm -f -- "$shortcut_temp" || :
   fi
+  if [ -n "$runtime_stage" ] && [ -e "$runtime_stage" ]; then rm -rf -- "$runtime_stage" || :; fi
+  if [ -n "$runtime_pointer_temp" ]; then rm -f -- "$runtime_pointer_temp" || :; fi
+  if [ -n "$runtime_launcher_temp" ]; then rm -f -- "$runtime_launcher_temp" || :; fi
+  if [ -n "${runtime_backup_current:-}" ] && [ -e "$runtime_backup_current" ] && [ "$runtime_committed" -eq 1 ]; then rm -f -- "$runtime_backup_current" || :; fi
+  if [ -n "${runtime_backup_launcher:-}" ] && [ -e "$runtime_backup_launcher" ] && [ "$runtime_committed" -eq 1 ]; then rm -f -- "$runtime_backup_launcher" || :; fi
+  if [ -n "${runtime_backup_version:-}" ] && [ -e "$runtime_backup_version" ] && [ "$runtime_committed" -eq 1 ]; then rm -rf -- "$runtime_backup_version" || :; fi
   exit "$cleanup_status"
 }
 
@@ -203,6 +369,30 @@ remove_gui_shortcut() {
       fi
       ;;
   esac
+}
+
+remove_managed_runtime() {
+  runtime_root=$install_dir/.puls-runtime
+  runtime_versions=$runtime_root/versions
+  runtime_current=$runtime_root/current
+  if [ -L "$runtime_current" ]; then
+    if runtime_pointer_target "$runtime_current"; then
+      rm -f -- "$runtime_current" || fail "не удалось удалить указатель runtime"
+    fi
+  elif [ -e "$runtime_current" ]; then
+    fail "$runtime_current не принадлежит установщику Puls"
+  fi
+  if [ -d "$runtime_versions" ] && [ ! -L "$runtime_versions" ]; then
+    for runtime_version_dir in "$runtime_versions"/*; do
+      [ -e "$runtime_version_dir" ] || continue
+      runtime_basename=${runtime_version_dir##*/}
+      if runtime_owned "$runtime_version_dir" "$runtime_basename"; then
+        rm -rf -- "$runtime_version_dir" || fail "не удалось удалить runtime $runtime_basename"
+      fi
+    done
+    rmdir "$runtime_versions" 2>/dev/null || :
+  fi
+  rmdir "$runtime_root" 2>/dev/null || :
 }
 
 macos_shortcut_is_managed() {
@@ -397,11 +587,18 @@ if [ "$uninstall" -eq 1 ]; then
     fail "$target_binary является каталогом; удаление остановлено"
   fi
   if [ -e "$target_binary" ] || [ -L "$target_binary" ]; then
+    if [ -L "$target_binary" ]; then
+      case "$(readlink "$target_binary")" in
+        .puls-runtime/current/bin/puls|.puls-runtime/current/puls.app/Contents/MacOS/puls) ;;
+        *) fail "$target_binary является ссылкой вне управляемого runtime" ;;
+      esac
+    fi
     rm -f -- "$target_binary" || fail "не удалось удалить $target_binary"
     say "Puls удалён: $target_binary"
   else
     say "Puls уже удалён: $target_binary"
   fi
+  remove_managed_runtime
   if [ "$update_path" -eq 1 ]; then
     remove_path_configuration
   fi
@@ -618,35 +815,87 @@ extract_dir=$temporary_dir/extracted
 mkdir -p "$extract_dir"
 package_dir=${asset%.tar.gz}
 binary_member=$package_dir/puls
-tar -xzf "$archive_path" -C "$extract_dir" "$binary_member" || \
-  fail "не удалось извлечь puls из пакета"
-binary_path=$extract_dir/$binary_member
-if [ ! -f "$binary_path" ] || [ -L "$binary_path" ]; then
-  fail "в архиве не найден обычный файл puls"
-fi
 icon_path=""
-if [ "$asset_gui" -eq 1 ]; then
-  icon_member=$package_dir/assets/Icon.png
-  tar -xzf "$archive_path" -C "$extract_dir" "$icon_member" || \
-    fail "не удалось извлечь значок Puls из пакета"
-  icon_path=$extract_dir/$icon_member
-  if [ ! -f "$icon_path" ] || [ -L "$icon_path" ]; then
-    fail "в архиве не найден обычный файл Icon.png"
+runtime_member=""
+if tar -tzf "$archive_path" | grep -Fqx "$package_dir/bin/puls"; then
+  runtime_member=bin/puls
+elif tar -tzf "$archive_path" | grep -Fqx "$package_dir/puls.app/Contents/MacOS/puls"; then
+  runtime_member=puls.app/Contents/MacOS/puls
+fi
+
+if [ -n "$runtime_member" ]; then
+  validate_archive_members "$archive_path" "$package_dir"
+  if tar -tvzf "$archive_path" | awk '$1 ~ /^h/ { found = 1 } END { exit !found }'; then
+    fail "архив содержит неподдерживаемые hard links"
+  fi
+  tar -xzf "$archive_path" -C "$extract_dir" --no-same-owner || \
+    fail "не удалось извлечь runtime из пакета"
+  runtime_tree=$extract_dir/$package_dir
+  binary_path=$runtime_tree/$runtime_member
+  if [ ! -f "$binary_path" ] || [ -L "$binary_path" ]; then
+    fail "в runtime не найден обычный файл puls"
+  fi
+  case "$runtime_member" in
+    bin/puls) [ "$target_os" = linux ] || fail "runtime имеет неожиданную структуру для $target_os" ;;
+    puls.app/*) [ "$target_os" = darwin ] || fail "runtime имеет неожиданную структуру для $target_os" ;;
+  esac
+  icon_path=$runtime_tree/assets/Icon.png
+  [ -f "$icon_path" ] && [ ! -L "$icon_path" ] || icon_path=""
+  if [ "$asset_gui" -eq 1 ] && [ -z "$icon_path" ]; then
+    fail "в runtime не найден assets/Icon.png для ярлыка"
+  fi
+  find "$runtime_tree" -type l -print | while IFS= read -r runtime_link; do
+    link_target=$(readlink "$runtime_link") || fail "не удалось проверить ссылку runtime"
+    case "$link_target" in
+      /*|*\\*) fail "runtime содержит небезопасную ссылку" ;;
+    esac
+    link_relative=${runtime_link#"$runtime_tree"/}
+    if ! printf '%s\n%s\n' "${link_relative%/*}" "$link_target" | awk '
+      NR == 1 { count = split($0, base, "/"); for (i = 1; i <= count; i++) if (base[i] != "" && base[i] != ".") stack[++depth] = base[i]; next }
+      NR == 2 { count = split($0, target, "/"); for (i = 1; i <= count; i++) { if (target[i] == "" || target[i] == ".") continue; if (target[i] == "..") { if (depth == 0) exit 1; depth-- } else stack[++depth] = target[i] } }
+      END { if (NR != 2) exit 1 }
+    '; then
+      fail "runtime содержит ссылку за пределы каталога"
+    fi
+  done || fail "runtime содержит некорректную ссылку"
+  install_runtime_tree "$runtime_tree" "$runtime_member"
+else
+  tar -xzf "$archive_path" -C "$extract_dir" "$binary_member" || \
+    fail "не удалось извлечь puls из пакета"
+  binary_path=$extract_dir/$binary_member
+  if [ ! -f "$binary_path" ] || [ -L "$binary_path" ]; then
+    fail "в архиве не найден обычный файл puls"
+  fi
+  if [ "$asset_gui" -eq 1 ]; then
+    icon_member=$package_dir/assets/Icon.png
+    tar -xzf "$archive_path" -C "$extract_dir" "$icon_member" || \
+      fail "не удалось извлечь значок Puls из пакета"
+    icon_path=$extract_dir/$icon_member
+    if [ ! -f "$icon_path" ] || [ -L "$icon_path" ]; then
+      fail "в архиве не найден обычный файл Icon.png"
+    fi
   fi
 fi
 
-mkdir -p "$install_dir"
-target_binary=$install_dir/puls
-[ ! -d "$target_binary" ] || fail "$target_binary является каталогом"
-install_action=установлен
-if [ -e "$target_binary" ] || [ -L "$target_binary" ]; then
-  install_action=обновлён
+if [ -z "$runtime_member" ]; then
+  mkdir -p "$install_dir"
+  target_binary=$install_dir/puls
+  [ ! -d "$target_binary" ] || fail "$target_binary является каталогом"
+  install_action=установлен
+  if [ -e "$target_binary" ] || [ -L "$target_binary" ]; then
+    install_action=обновлён
+  fi
+  staged_binary=$(mktemp "$install_dir/.puls.XXXXXXXX") || fail "каталог установки недоступен: $install_dir"
+  cp "$binary_path" "$staged_binary"
+  chmod 0755 "$staged_binary"
+  mv -f "$staged_binary" "$target_binary"
+  staged_binary=""
+else
+  install_action=установлен
+  if [ -L "$install_dir/puls" ] && runtime_pointer_target "$install_dir/.puls-runtime/current"; then
+    install_action=обновлён
+  fi
 fi
-staged_binary=$(mktemp "$install_dir/.puls.XXXXXXXX") || fail "каталог установки недоступен: $install_dir"
-cp "$binary_path" "$staged_binary"
-chmod 0755 "$staged_binary"
-mv -f "$staged_binary" "$target_binary"
-staged_binary=""
 
 say "Puls $version $install_action: $target_binary"
 add_path_configuration

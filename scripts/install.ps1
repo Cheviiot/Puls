@@ -109,6 +109,124 @@ function Remove-PulsShortcut {
     }
 }
 
+function Test-OwnedRuntime {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$RuntimeVersion)
+    $marker = Join-Path $Path ".puls-runtime-owner"
+    if (-not (Test-Path -LiteralPath $Path -PathType Container) -or
+        (Get-Item -Force -LiteralPath $Path).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
+        -not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        return $false
+    }
+    return (Get-Content -Raw -LiteralPath $marker).Trim() -ceq "puls-installer-v1:$RuntimeVersion"
+}
+
+function Get-OwnedCurrentRuntime {
+    param([Parameter(Mandatory = $true)][string]$RuntimeRoot)
+    $current = Join-Path $RuntimeRoot "current"
+    if (-not (Test-Path -LiteralPath $current -PathType Container)) { return $null }
+    $item = Get-Item -Force -LiteralPath $current
+    if (-not $item.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { return $null }
+    $resolved = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $current).Path)
+    $versions = [IO.Path]::GetFullPath((Join-Path $RuntimeRoot "versions")).TrimEnd("\") + "\"
+    if (-not $resolved.StartsWith($versions, [StringComparison]::OrdinalIgnoreCase)) { return $null }
+    $runtimeVersion = Split-Path -Leaf $resolved
+    if (-not (Test-OwnedRuntime -Path $resolved -RuntimeVersion $runtimeVersion)) { return $null }
+    return $resolved
+}
+
+function Install-RuntimeTree {
+    param([Parameter(Mandatory = $true)][string]$Source, [Parameter(Mandatory = $true)][string]$RuntimeVersion)
+    $runtimeRoot = Join-Path $InstallDir ".puls-runtime"
+    $versions = Join-Path $runtimeRoot "versions"
+    foreach ($directory in @($runtimeRoot, $versions)) {
+        if ((Test-Path -LiteralPath $directory) -and
+            ((Get-Item -Force -LiteralPath $directory).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
+             -not (Test-Path -LiteralPath $directory -PathType Container))) {
+            throw "Unsafe runtime directory: $directory"
+        }
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    }
+
+    $stage = Join-Path $versions (".stage." + [Guid]::NewGuid().ToString("N"))
+    $versionPath = Join-Path $versions $RuntimeVersion
+    $versionBackup = Join-Path $versions (".backup." + [Guid]::NewGuid().ToString("N"))
+    $current = Join-Path $runtimeRoot "current"
+    $currentBackup = Join-Path $runtimeRoot (".current-backup." + [Guid]::NewGuid().ToString("N"))
+    $shim = Join-Path $InstallDir "puls.cmd"
+    $shimStage = Join-Path $InstallDir (".puls." + [Guid]::NewGuid().ToString("N") + ".cmd")
+    $shimBackup = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".cmd")
+    $legacyExe = Join-Path $InstallDir "puls.exe"
+    $legacyBackup = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".exe")
+    $movedVersion = $false; $movedCurrent = $false; $madeCurrent = $false
+    $movedShim = $false; $madeShim = $false; $movedLegacy = $false; $hasOldShim = $false
+    try {
+        Copy-Item -Recurse -Force -LiteralPath $Source -Destination $stage
+        Set-Content -Encoding ASCII -NoNewline -LiteralPath (Join-Path $stage ".puls-runtime-owner") -Value "puls-installer-v1:$RuntimeVersion"
+        $runtimeExe = Join-Path $stage "bin\puls.exe"
+        if (-not (Test-Path -LiteralPath $runtimeExe -PathType Leaf)) { throw (Get-Message -Name BinaryMissing) }
+        if (Test-Path -LiteralPath $versionPath) {
+            if (-not (Test-OwnedRuntime -Path $versionPath -RuntimeVersion $RuntimeVersion)) { throw "Runtime version already exists and is not managed by Puls" }
+            Move-Item -Force -LiteralPath $versionPath -Destination $versionBackup | Out-Null
+            $movedVersion = $true
+        }
+        Move-Item -LiteralPath $stage -Destination $versionPath | Out-Null
+
+        if (Test-Path -LiteralPath $current) {
+            if ($null -eq (Get-OwnedCurrentRuntime -RuntimeRoot $runtimeRoot)) { throw "Current runtime is not managed by Puls" }
+            Move-Item -LiteralPath $current -Destination $currentBackup | Out-Null
+            $movedCurrent = $true
+        }
+        New-Item -ItemType Junction -Path $current -Target $versionPath | Out-Null
+        $madeCurrent = $true
+
+        if (Test-Path -LiteralPath $shim) {
+            if ((Get-Item -Force -LiteralPath $shim).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw "puls.cmd must be a regular file" }
+            $oldShim = Get-Content -Raw -LiteralPath $shim
+            if ($oldShim -notmatch '(?m)^REM Puls installer managed v1\r?$') { throw "puls.cmd exists and is not managed by Puls" }
+            $hasOldShim = $true
+        }
+        if (Test-Path -LiteralPath $legacyExe) {
+            if (-not (Test-Path -LiteralPath $legacyExe -PathType Leaf) -or
+                (Get-Item -Force -LiteralPath $legacyExe).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+                throw (Get-Message -Name InstallTargetDirectory -Arguments $legacyExe)
+            }
+            Move-Item -LiteralPath $legacyExe -Destination $legacyBackup | Out-Null
+            $movedLegacy = $true
+        }
+        $shimText = "@echo off`r`nREM Puls installer managed v1`r`n`"%~dp0.puls-runtime\current\bin\puls.exe`" %*`r`nexit /b %errorlevel%`r`n"
+        [IO.File]::WriteAllText($shimStage, $shimText, [Text.Encoding]::ASCII)
+        if ($hasOldShim) {
+            [IO.File]::Replace($shimStage, $shim, $shimBackup)
+            $movedShim = $true
+        } else {
+            [IO.File]::Move($shimStage, $shim)
+        }
+        $madeShim = $true
+        if ($movedShim) { Remove-Item -Force -LiteralPath $shimBackup -ErrorAction SilentlyContinue }
+        if ($movedLegacy) { Remove-Item -Force -LiteralPath $legacyBackup -ErrorAction SilentlyContinue }
+        if ($movedCurrent) { Remove-Item -Force -LiteralPath $currentBackup -ErrorAction SilentlyContinue }
+        if ($movedVersion) { Remove-Item -Recurse -Force -LiteralPath $versionBackup -ErrorAction SilentlyContinue }
+        foreach ($oldRuntime in Get-ChildItem -Force -Directory -LiteralPath $versions) {
+            if ($oldRuntime.Name -ne $RuntimeVersion -and (Test-OwnedRuntime -Path $oldRuntime.FullName -RuntimeVersion $oldRuntime.Name)) {
+                Remove-Item -Recurse -Force -LiteralPath $oldRuntime.FullName -ErrorAction SilentlyContinue
+            }
+        }
+        return (Join-Path $InstallDir "puls.cmd")
+    } catch {
+        if ($madeShim -and (Test-Path -LiteralPath $shim)) { Remove-Item -Force -LiteralPath $shim }
+        if ($movedShim -and (Test-Path -LiteralPath $shimBackup)) { Move-Item -LiteralPath $shimBackup -Destination $shim | Out-Null }
+        if ($movedLegacy -and (Test-Path -LiteralPath $legacyBackup)) { Move-Item -LiteralPath $legacyBackup -Destination $legacyExe | Out-Null }
+        if ($madeCurrent -and (Test-Path -LiteralPath $current)) { Remove-Item -Force -LiteralPath $current }
+        if ($movedCurrent -and (Test-Path -LiteralPath $currentBackup)) { Move-Item -LiteralPath $currentBackup -Destination $current | Out-Null }
+        if (Test-Path -LiteralPath $versionPath) { Remove-Item -Recurse -Force -LiteralPath $versionPath }
+        if ($movedVersion -and (Test-Path -LiteralPath $versionBackup)) { Move-Item -LiteralPath $versionBackup -Destination $versionPath | Out-Null }
+        throw
+    } finally {
+        if (Test-Path -LiteralPath $stage) { Remove-Item -Recurse -Force -LiteralPath $stage }
+        if (Test-Path -LiteralPath $shimStage) { Remove-Item -Force -LiteralPath $shimStage }
+    }
+}
+
 if ($Help) {
     Show-Usage
     exit 0
@@ -134,10 +252,49 @@ if ($Uninstall) {
         throw (Get-Message -Name RemoveTargetDirectory -Arguments $targetBinary)
     }
     if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
+        if ((Get-Item -Force -LiteralPath $targetBinary).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw "Refusing to remove a linked puls.exe."
+        }
         Remove-Item -Force -LiteralPath $targetBinary
         Write-Host (Get-Message -Name Removed -Arguments $targetBinary)
     } else {
         Write-Host (Get-Message -Name AlreadyRemoved -Arguments $targetBinary)
+    }
+
+    $managedShim = Join-Path $InstallDir "puls.cmd"
+    $canRemoveRuntime = $true
+    if (Test-Path -LiteralPath $managedShim -PathType Leaf) {
+        if (-not (Get-Item -Force -LiteralPath $managedShim).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -and
+            (Get-Content -Raw -LiteralPath $managedShim) -match '(?m)^REM Puls installer managed v1\r?$') {
+            Remove-Item -Force -LiteralPath $managedShim
+            Write-Host (Get-Message -Name Removed -Arguments $managedShim)
+        } else {
+            $canRemoveRuntime = $false
+        }
+    } elseif (Test-Path -LiteralPath $managedShim) {
+        $canRemoveRuntime = $false
+    }
+    $runtimeRoot = Join-Path $InstallDir ".puls-runtime"
+    $versions = Join-Path $runtimeRoot "versions"
+    $ownedCurrent = Get-OwnedCurrentRuntime -RuntimeRoot $runtimeRoot
+    $current = Join-Path $runtimeRoot "current"
+    if ((Test-Path -LiteralPath $current) -and $null -eq $ownedCurrent) { $canRemoveRuntime = $false }
+    if ($canRemoveRuntime -and $null -ne $ownedCurrent -and (Test-Path -LiteralPath $current)) {
+        Remove-Item -Force -LiteralPath $current
+    }
+    if ($canRemoveRuntime -and (Test-Path -LiteralPath $versions -PathType Container) -and
+        -not (Get-Item -Force -LiteralPath $versions).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+        foreach ($runtimeDir in Get-ChildItem -Force -Directory -LiteralPath $versions) {
+            if (Test-OwnedRuntime -Path $runtimeDir.FullName -RuntimeVersion $runtimeDir.Name) {
+                Remove-Item -Recurse -Force -LiteralPath $runtimeDir.FullName
+            }
+        }
+        if (@(Get-ChildItem -Force -LiteralPath $versions).Count -eq 0) { Remove-Item -Force -LiteralPath $versions }
+    }
+    if ($canRemoveRuntime -and (Test-Path -LiteralPath $runtimeRoot -PathType Container) -and
+        -not (Get-Item -Force -LiteralPath $runtimeRoot).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -and
+        @(Get-ChildItem -Force -LiteralPath $runtimeRoot).Count -eq 0) {
+        Remove-Item -Force -LiteralPath $runtimeRoot
     }
 
     if (-not $NoPathUpdate) {
@@ -311,42 +468,71 @@ try {
     }
 
     $extractDir = Join-Path $temporaryDir "extracted"
+    [void][Reflection.Assembly]::LoadWithPartialName("System.IO.Compression.FileSystem")
+    $archiveReader = [IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        $expectedRoot = "Puls_${Version}_windows_${targetArch}/"
+        $entryNames = @{}
+        foreach ($entry in $archiveReader.Entries) {
+            $entryName = [string]$entry.FullName
+            if ($entryName.Contains("\") -or $entryName.StartsWith("/") -or $entryName -match '(^|/)\.\.(?:/|$)' -or
+                $entryName -match '^[A-Za-z]:' -or -not $entryName.StartsWith($expectedRoot, [StringComparison]::Ordinal)) {
+                throw "Archive contains an unsafe path"
+            }
+            if ($entryNames.ContainsKey($entryName)) { throw "Archive contains a duplicate path" }
+            $entryNames[$entryName] = $true
+            $unixMode = ([int]$entry.ExternalAttributes -shr 16) -band 0xF000
+            if ($unixMode -eq 0xA000) { throw "Archive contains an unsupported symbolic link" }
+        }
+    } finally {
+        $archiveReader.Dispose()
+    }
     Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDir
-    $binaryPath = Join-Path $extractDir "Puls_${Version}_windows_${targetArch}\puls.exe"
-    if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+    $packageRoot = Join-Path $extractDir "Puls_${Version}_windows_${targetArch}"
+    $runtimeSource = Join-Path $packageRoot "bin"
+    $isRuntime = Test-Path -LiteralPath (Join-Path $runtimeSource "puls.exe") -PathType Leaf
+    $binaryPath = Join-Path $packageRoot "puls.exe"
+    if (-not $isRuntime -and -not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
         throw (Get-Message -Name BinaryMissing)
     }
     $iconPath = $null
     if ($hasGUI) {
-        $iconPath = Join-Path $extractDir "Puls_${Version}_windows_${targetArch}\assets\Icon.ico"
+        $iconPath = Join-Path $packageRoot "assets\Icon.ico"
         if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) {
             throw (Get-Message -Name IconMissing)
         }
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    $targetBinary = Join-Path $InstallDir "puls.exe"
-    if (Test-Path -LiteralPath $targetBinary -PathType Container) {
-        throw (Get-Message -Name InstallTargetDirectory -Arguments $targetBinary)
-    }
-    $installAction = if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
-        Get-Message -Name Updated
+    if ($isRuntime) {
+        $previousRuntime = Get-OwnedCurrentRuntime -RuntimeRoot (Join-Path $InstallDir ".puls-runtime")
+        $targetBinary = Install-RuntimeTree -Source $packageRoot -RuntimeVersion $Version
+        $runtimeCurrentExe = Join-Path $InstallDir ".puls-runtime\current\bin\puls.exe"
+        $installAction = if ($null -ne $previousRuntime) { Get-Message -Name Updated } else { Get-Message -Name Installed }
     } else {
-        Get-Message -Name Installed
+        $targetBinary = Join-Path $InstallDir "puls.exe"
+        if (Test-Path -LiteralPath $targetBinary -PathType Container) {
+            throw (Get-Message -Name InstallTargetDirectory -Arguments $targetBinary)
+        }
+        $installAction = if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
+            Get-Message -Name Updated
+        } else {
+            Get-Message -Name Installed
+        }
+        $stagedBinary = Join-Path $InstallDir (".puls." + [Guid]::NewGuid().ToString("N") + ".exe")
+        [IO.File]::Copy($binaryPath, $stagedBinary, $true)
+        if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
+            $backupBinary = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".exe")
+            [IO.File]::Replace($stagedBinary, $targetBinary, $backupBinary)
+        } else {
+            [IO.File]::Move($stagedBinary, $targetBinary)
+        }
+        $stagedBinary = $null
+        if ($null -ne $backupBinary -and (Test-Path -LiteralPath $backupBinary)) {
+            Remove-Item -Force -LiteralPath $backupBinary
+        }
+        $backupBinary = $null
     }
-    $stagedBinary = Join-Path $InstallDir (".puls." + [Guid]::NewGuid().ToString("N") + ".exe")
-    [IO.File]::Copy($binaryPath, $stagedBinary, $true)
-    if (Test-Path -LiteralPath $targetBinary -PathType Leaf) {
-        $backupBinary = Join-Path $InstallDir (".puls-backup." + [Guid]::NewGuid().ToString("N") + ".exe")
-        [IO.File]::Replace($stagedBinary, $targetBinary, $backupBinary)
-    } else {
-        [IO.File]::Move($stagedBinary, $targetBinary)
-    }
-    $stagedBinary = $null
-    if ($null -ne $backupBinary -and (Test-Path -LiteralPath $backupBinary)) {
-        Remove-Item -Force -LiteralPath $backupBinary
-    }
-    $backupBinary = $null
 
     if (-not $NoPathUpdate) {
         $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -373,16 +559,27 @@ try {
 
     if ($hasGUI -and -not $NoShortcut) {
         $targetIcon = Join-Path $InstallDir "Puls.ico"
-        [IO.File]::Copy($iconPath, $targetIcon, $true)
+        $shortcutTarget = Join-Path $InstallDir "puls.exe"
+        if ($isRuntime) {
+            $targetIcon = Join-Path $InstallDir ".puls-runtime\current\assets\Icon.ico"
+            $shortcutTarget = Join-Path $InstallDir ".puls-runtime\current\bin\puls.exe"
+        } else {
+            [IO.File]::Copy($iconPath, $targetIcon, $true)
+        }
         $shortcutPath = Get-PulsShortcutPath
         if ($null -ne $shortcutPath) {
             $shortcutDirectory = Split-Path -Parent $shortcutPath
             New-Item -ItemType Directory -Force -Path $shortcutDirectory | Out-Null
             $shell = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-            $quotedBinary = $targetBinary.Replace("'", "''")
-            $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -Command `"& '$quotedBinary' gui`""
+            if ($isRuntime) {
+                $shortcut.TargetPath = $shortcutTarget
+                $shortcut.Arguments = "gui"
+            } else {
+                $shortcut.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+                $quotedBinary = $targetBinary.Replace("'", "''")
+                $shortcut.Arguments = "-NoProfile -WindowStyle Hidden -Command `"& '$quotedBinary' gui`""
+            }
             $shortcut.WorkingDirectory = $InstallDir
             $shortcut.IconLocation = "$targetIcon,0"
             $shortcut.Description = "Puls GUI launcher managed by Puls installer"
